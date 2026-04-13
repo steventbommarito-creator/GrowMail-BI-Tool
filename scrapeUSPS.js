@@ -58,18 +58,15 @@ async function scrapeUSPS() {
     console.log('Post-login URL:', currentUrl);
     console.log('Post-login title:', pageTitle);
 
-    // Wait for the post-login dashboard — "Manage Account" appears once logged in
-    console.log('Waiting for Manage Account...');
-    await page.getByText('Manage Account').waitFor({ state: 'visible', timeout: 30000 });
     console.log('Logged in successfully');
 
-    // Navigate to Mailing Reports
-    await page.getByText('Manage Account').click();
-    await page.getByRole('link', { name: 'Mailing Reports image of side' }).click();
-    console.log('Navigated to Mailing Reports');
+    // Navigate directly to PostalOne mailing reports
+    await page.goto('https://www.uspspostalone.com/postal1/view.cfm');
+    await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
+    console.log('Navigated to PostalOne, URL:', page.url());
 
     // Navigate to View Transactions inside the iframe
-    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(2000);
     const mainFrame = page.frame({ name: 'portal_main' });
     if (!mainFrame) throw new Error('Could not find portal_main frame');
     await mainFrame.getByRole('link', { name: 'View Transactions' }).click();
