@@ -170,7 +170,8 @@ export default function ForecastPage() {
   const [transactions, setTransactions]         = useState([]);
   const [projectedDeposits, setProjectedDeposits] = useState([]);
   const [loading, setLoading]                   = useState(true);
-  const [chartMode, setChartMode]               = useState('order'); // 'order' | 'drop'
+  const [chartMode, setChartMode]               = useState('order'); // 'order' | 'drop' | 'product'
+  const [selectedProduct, setSelectedProduct]   = useState(null);
 
   const today         = new Date().toISOString().split('T')[0];
   const nextWeekStart = addDays(getWeekStart(today), 7); // start of next week
@@ -257,6 +258,27 @@ export default function ForecastPage() {
     }
     return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week)).slice(0, 12);
   }, [drops]);
+
+  // ── Filtered chart data when a product is selected ────────────────────────
+  const chartWeeklyBreakdown = useMemo(() => {
+    if (!selectedProduct) return weeklyBreakdown;
+    // Recompute weekly data using only drops matching the selected product
+    const weekMap = {};
+    for (const d of drops) {
+      if (!d.drop_est_date) continue;
+      if ((d.product_category || 'Unknown') !== selectedProduct) continue;
+      const ws = getWeekStart(d.drop_est_date);
+      if (!weekMap[ws]) weekMap[ws] = { week: ws, label: weekRangeLabel(ws), total: 0 };
+      const p = effectivePostage(d);
+      weekMap[ws].total += p;
+      const ob = orderBucket(d.order_status);
+      if (ob) weekMap[ws][`o_${ob}`] = (weekMap[ws][`o_${ob}`] || 0) + p;
+      const db = dropBucket(d.drop_status);
+      if (db) weekMap[ws][`d_${db}`] = (weekMap[ws][`d_${db}`] || 0) + p;
+      weekMap[ws][`p_${selectedProduct}`] = (weekMap[ws][`p_${selectedProduct}`] || 0) + p;
+    }
+    return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week));
+  }, [drops, weeklyBreakdown, selectedProduct]);
 
   // ── EPS runway ────────────────────────────────────────────────────────────
   const runwayData = useMemo(() => {
@@ -345,9 +367,28 @@ export default function ForecastPage() {
       {/* Stacked bar with toggle */}
       <div className="rounded-xl p-4 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
-            Postage by Week
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
+              Postage by Week
+            </h2>
+            {selectedProduct && (
+              <span className="flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full font-medium"
+                style={{ background: (productColorMap[selectedProduct] || 'var(--accent)') + '22', color: productColorMap[selectedProduct] || 'var(--accent)', border: `1px solid ${productColorMap[selectedProduct] || 'var(--accent)'}55` }}>
+                {selectedProduct}
+                <button onClick={() => setSelectedProduct(null)}
+                  className="ml-0.5 font-bold hover:opacity-70"
+                  style={{ lineHeight: 1 }}>×</button>
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {selectedProduct && (
+              <button onClick={() => setSelectedProduct(null)}
+                className="text-xs px-2.5 py-1 rounded font-medium"
+                style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+                ↺ Reset filter
+              </button>
+            )}
           {/* Toggle */}
           <div className="flex rounded overflow-hidden" style={{ border: '1px solid var(--border)' }}>
             {[['order', 'By Order Stage'], ['drop', 'By Drop Status'], ['product', 'By Product']].map(([mode, label]) => (
@@ -361,6 +402,7 @@ export default function ForecastPage() {
                 {label}
               </button>
             ))}
+          </div>
           </div>
         </div>
 
@@ -386,7 +428,7 @@ export default function ForecastPage() {
         </div>
 
         <ResponsiveContainer width="100%" height={260}>
-          <BarChart data={weeklyBreakdown} margin={{ left: 10 }}>
+          <BarChart data={chartWeeklyBreakdown} margin={{ left: 10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
             <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
             <YAxis tickFormatter={fmtK} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
@@ -407,16 +449,26 @@ export default function ForecastPage() {
         <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--text-secondary)' }}>
           Postage by Product Type
         </h2>
-        <div className="space-y-2">
+        <div className="space-y-1">
           {productCategories.map(({ cat, color }) => {
-            const val  = productTotals[cat] || 0;
-            const pct  = totalPostage > 0 ? (val / totalPostage) * 100 : 0;
-            const cnt  = drops.filter(d => (d.product_category || 'Unknown') === cat).length;
-            const pcs  = drops.filter(d => (d.product_category || 'Unknown') === cat)
-                              .reduce((s, d) => s + (d.mail_drop_quantity || 0), 0);
+            const val      = productTotals[cat] || 0;
+            const pct      = totalPostage > 0 ? (val / totalPostage) * 100 : 0;
+            const cnt      = drops.filter(d => (d.product_category || 'Unknown') === cat).length;
+            const pcs      = drops.filter(d => (d.product_category || 'Unknown') === cat)
+                                  .reduce((s, d) => s + (d.mail_drop_quantity || 0), 0);
+            const isActive = selectedProduct === cat;
+            const isDimmed = selectedProduct && !isActive;
             return (
-              <div key={cat}>
-                <div className="flex items-center justify-between mb-1">
+              <div key={cat}
+                onClick={() => setSelectedProduct(isActive ? null : cat)}
+                className="rounded-lg px-3 py-2 cursor-pointer"
+                style={{
+                  background: isActive ? color + '18' : 'transparent',
+                  border: `1px solid ${isActive ? color + '55' : 'transparent'}`,
+                  opacity: isDimmed ? 0.35 : 1,
+                  transition: 'all 0.15s ease',
+                }}>
+                <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: color }} />
                     <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{cat}</span>
@@ -426,7 +478,8 @@ export default function ForecastPage() {
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{pct.toFixed(1)}%</span>
-                    <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)', minWidth: 100, textAlign: 'right' }}>{fmt$(val)}</span>
+                    <span className="text-sm font-semibold" style={{ color: isActive ? color : 'var(--text-primary)', minWidth: 100, textAlign: 'right' }}>{fmt$(val)}</span>
+                    {isActive && <span className="text-xs font-medium" style={{ color }}> ✓</span>}
                   </div>
                 </div>
                 <div className="rounded-full h-1.5 w-full" style={{ background: 'var(--surface2)' }}>
