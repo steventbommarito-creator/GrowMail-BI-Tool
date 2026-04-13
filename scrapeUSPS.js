@@ -35,23 +35,25 @@ async function scrapeUSPS() {
     console.log('After BCG click, URL:', page.url());
 
     // Step 3: Fill in credentials using ForgeRock test IDs
+    // Step 3: Fill credentials — use pressSequentially to trigger React events
     console.log('Looking for ForgeRock username field...');
     const usernameContainer = page.getByTestId('fr-field-callback_1');
     await usernameContainer.waitFor({ state: 'attached', timeout: 15000 });
     const usernameInput = usernameContainer.locator('input').first();
     await usernameInput.waitFor({ state: 'visible', timeout: 15000 });
     await usernameInput.click();
-    await usernameInput.fill(user);
-    console.log('Username filled, value length:', user.length);
+    await usernameInput.pressSequentially(user, { delay: 80 });
+    console.log('Username typed, length:', user.length);
 
     const passwordInput = page.getByTestId('fr-field-callback_2').locator('input').first();
     await passwordInput.waitFor({ state: 'visible', timeout: 10000 });
     await passwordInput.click();
-    await passwordInput.fill(pass);
-    console.log('Password filled, value length:', pass.length);
+    await passwordInput.pressSequentially(pass, { delay: 80 });
+    console.log('Password typed, length:', pass.length);
 
     // Step 4: Submit login
     await page.getByRole('button', { name: 'Sign In' }).click();
+    await page.waitForTimeout(1000);
 
     // Wait for redirect back to gateway
     console.log('Waiting for post-login navigation...');
