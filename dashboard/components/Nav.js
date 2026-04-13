@@ -10,7 +10,6 @@ export default function Nav() {
   const pathname = usePathname();
   const supabase = createClient();
   const { theme, setTheme } = useTheme();
-  const [unread, setUnread] = useState(0);
   const [triggerStatus, setTriggerStatus] = useState({});
   const [triggerError, setTriggerError] = useState({});
   const [showThemeMenu, setShowThemeMenu] = useState(false);
@@ -24,11 +23,6 @@ export default function Nav() {
     { href: '/hygiene', label: 'Data Hygiene' },
   ];
 
-  useEffect(() => {
-    loadUnread();
-    const interval = setInterval(loadUnread, 60000);
-    return () => clearInterval(interval);
-  }, []);
 
   useEffect(() => {
     function handleClick(e) {
@@ -39,14 +33,6 @@ export default function Nav() {
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
-
-  async function loadUnread() {
-    const { count } = await supabase
-      .from('notifications')
-      .select('id', { count: 'exact', head: true })
-      .eq('is_read', false);
-    setUnread(count || 0);
-  }
 
   async function handleSignOut() {
     await supabase.auth.signOut();
@@ -152,14 +138,8 @@ export default function Nav() {
           )}
         </div>
 
-        <Link href="/hygiene?tab=feed" className="relative text-lg" title="Notifications">
-          <span style={{ color: 'var(--text-secondary)' }}>🔔</span>
-          {unread > 0 && (
-            <span className="absolute -top-1 -right-1 text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center"
-              style={{ background: 'var(--status-critical)', color: '#fff', fontSize: '9px' }}>
-              {unread > 9 ? '9+' : unread}
-            </span>
-          )}
+        <Link href="/hygiene?tab=feed" className="relative text-lg" title="Activity Log">
+          <span style={{ color: 'var(--text-secondary)' }}>📰</span>
         </Link>
 
         <button onClick={handleSignOut} className="text-xs" style={{ color: 'var(--text-muted)' }}>

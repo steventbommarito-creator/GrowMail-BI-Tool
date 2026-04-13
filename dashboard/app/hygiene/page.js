@@ -70,18 +70,13 @@ function HygieneContent() {
   useEffect(() => { loadHygiene(); }, [loadHygiene]);
   useEffect(() => { if (tab === 'feed') loadFeed(); }, [tab, loadFeed]);
 
-  async function markAllRead() {
-    await supabase.from('notifications').update({ is_read: true }).eq('is_read', false);
-    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
-  }
-
   const sources = ['osprey', 'usps'];
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
-          {tab === 'hygiene' ? 'Data Hygiene' : 'News Feed'}
+          {tab === 'hygiene' ? 'Data Hygiene' : 'Activity Log'}
         </h1>
         <div className="flex gap-2">
           {['hygiene', 'feed'].map(t => (
@@ -92,7 +87,7 @@ function HygieneContent() {
                 color: tab === t ? 'var(--accent-text)' : 'var(--text-secondary)',
                 border: '1px solid var(--border)',
               }}>
-              {t === 'hygiene' ? 'Data Sources' : '🔔 News Feed'}
+              {t === 'hygiene' ? 'Data Sources' : '📰 Activity Log'}
             </button>
           ))}
         </div>
@@ -211,27 +206,13 @@ function HygieneContent() {
       {/* NEWS FEED TAB */}
       {tab === 'feed' && (
         <div>
-          <div className="flex justify-between items-center mb-3">
-            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-              {notifications.filter(n => !n.is_read).length} unread
-            </p>
-            <button onClick={markAllRead}
-              className="text-xs px-3 py-1 rounded"
-              style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
-              Mark all read
-            </button>
-          </div>
-
           <div className="space-y-2">
             {notifications.map(n => (
               <div key={n.id} className="rounded-lg p-3 border flex gap-3"
-                style={{
-                  background: n.is_read ? 'var(--surface)' : 'var(--accent-light)',
-                  borderColor: n.is_read ? 'var(--border)' : 'var(--accent)',
-                }}>
+                style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
                 <div className="flex-shrink-0 mt-0.5">
                   <span className="w-2 h-2 rounded-full block mt-1"
-                    style={{ background: n.is_read ? 'var(--border)' : 'var(--accent)' }} />
+                    style={{ background: 'var(--border)' }} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
