@@ -18,9 +18,24 @@ async function scrapeUSPS() {
     throw new Error('Missing required environment variables: USPS_USER, USPS_PASS');
   }
 
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ acceptDownloads: true });
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+    ],
+  });
+  const context = await browser.newContext({
+    acceptDownloads: true,
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  });
   const page = await context.newPage();
+
+  // Remove webdriver flag that triggers bot detection
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  });
 
   try {
     // Step 1: Load the BCG gateway page
