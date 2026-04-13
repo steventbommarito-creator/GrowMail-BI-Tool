@@ -36,6 +36,14 @@ const ORDER_BUCKETS = {
   'Mail Ready':     '#10b981',
 };
 
+const ORDER_BUCKET_STATUSES = {
+  'Pre-Production': ['INCOMING [APPROVED]', 'DESIGN', 'DESIGN [PROOF]', 'DESIGN [PROOF - INT]', 'DESIGN [REUPLOAD]', 'DESIGN PROOF QC', 'DESIGN FINAL QC', 'DESIGN APPROVED', 'GRAPHICS [WIP]'],
+  'Press':          ['PREPRESS', 'PREPRESS [PROOF]', 'PREPRESS [REUPLOAD]', 'PREPRESS [PCCB]', 'PROOF APPROVED', 'QC APPROVAL', 'PRESS [READY]'],
+  'Digital':        ['DIGITAL READY', 'DIGITAL OUTSOURCED', 'DIGITAL [STAGING]', 'DIGITAL [CUTTING]', 'DIGITAL [SHIPPING]', 'DAL [STAGING]', 'DAL [SUBMITTED]', 'DMM [STAGING]', 'DMM [ACTIVE]'],
+  'Outsourced':     ['OUTSOURCED', 'OUTSOURCED [STAGING]', 'OUTSOURCED [LVC]', 'WAREHOUSE [KSCOPE]', 'WAREHOUSE [LVC]', 'ACTIVE RUN'],
+  'Mail Ready':     ['READY [MAIL]', 'SHIPPED', 'COMPLETE'],
+};
+
 function orderBucket(status) {
   if (!status) return null;
   const s = status.toUpperCase();
@@ -49,24 +57,79 @@ function orderBucket(status) {
 
 // ─── Drop status buckets ──────────────────────────────────────────────────────
 const DROP_BUCKETS = {
-  'Pre-Mail':           '#8b5cf6',
-  'In Production':      '#3b82f6',
-  'EDDM':               '#06b6d4',
-  'Near Mail':          '#10b981',
-  'Outsourced/WH':      '#f59e0b',
-  'On Hold':            '#ef4444',
+  'Pre-Mail':      '#8b5cf6',
+  'In Production': '#3b82f6',
+  'EDDM':          '#06b6d4',
+  'Near Mail':     '#10b981',
+  'Outsourced/WH': '#f59e0b',
+  'On Hold':       '#ef4444',
+};
+
+const DROP_BUCKET_STATUSES = {
+  'Pre-Mail':      ['NEW', 'LIST RECEIVED', 'SCHEDULED', 'MAILING_LIST_IMPORTED', 'INITIAL', 'QUOTED'],
+  'In Production': ['PRODUCTION', 'INKJETTING', 'DAL', 'DAL SUBMITTED', 'OUTSOURCED'],
+  'EDDM':          ['EDDM AWAITING ROUTES', 'EDDM PROCESSED', 'EDDM ROUTES ASSIGNED', 'EDDM ROUTES RECEIVED', '(any EDDM* status)'],
+  'Near Mail':     ['READY SHIP', 'PENDING SHIP', 'RFL'],
+  'Outsourced/WH': ['WAREHOUSE'],
+  'On Hold':       ['HOLD [CUST]', 'HOLD [MGR]', 'PAUSED'],
 };
 
 function dropBucket(status) {
   if (!status) return null;
   const s = status.toUpperCase().trim();
   if (['NEW', 'LIST RECEIVED', 'SCHEDULED', 'MAILING_LIST_IMPORTED', 'INITIAL', 'QUOTED'].includes(s)) return 'Pre-Mail';
-  if (['PRODUCTION', 'INKJETTING', 'DAL', 'DAL SUBMITTED'].includes(s)) return 'In Production';
+  if (['PRODUCTION', 'INKJETTING', 'DAL', 'DAL SUBMITTED', 'OUTSOURCED'].includes(s)) return 'In Production';
   if (s.startsWith('EDDM')) return 'EDDM';
   if (['READY SHIP', 'PENDING SHIP', 'RFL'].includes(s)) return 'Near Mail';
-  if (['OUTSOURCED', 'WAREHOUSE'].includes(s)) return 'Outsourced/WH';
+  if (['WAREHOUSE'].includes(s)) return 'Outsourced/WH';
   if (s.startsWith('HOLD') || s === 'PAUSED') return 'On Hold';
   return null;
+}
+
+// ─── Info tooltip component ───────────────────────────────────────────────────
+function InfoTip({ statuses, color }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-flex items-center" style={{ verticalAlign: 'middle' }}>
+      <button
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onClick={() => setOpen(v => !v)}
+        className="inline-flex items-center justify-center rounded-full text-xs font-bold ml-1 flex-shrink-0"
+        style={{
+          width: 14, height: 14,
+          background: color + '22',
+          color,
+          border: `1px solid ${color}55`,
+          lineHeight: 1,
+          cursor: 'default',
+        }}
+        tabIndex={-1}
+      >
+        i
+      </button>
+      {open && (
+        <div className="absolute z-50 rounded-lg shadow-xl border p-2 text-xs"
+          style={{
+            bottom: '120%', left: '50%', transform: 'translateX(-50%)',
+            background: 'var(--surface)', borderColor: 'var(--border)',
+            color: 'var(--text-secondary)',
+            minWidth: 160, maxWidth: 240,
+            pointerEvents: 'none',
+          }}>
+          <div className="font-semibold mb-1" style={{ color }}>Includes:</div>
+          <ul className="space-y-0.5">
+            {statuses.map(s => (
+              <li key={s} className="flex items-center gap-1">
+                <span style={{ color: color, fontSize: 8 }}>●</span>
+                <span style={{ color: 'var(--text-primary)' }}>{s}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </span>
+  );
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -268,12 +331,14 @@ export default function ForecastPage() {
         {/* Bucket legend pills */}
         <div className="flex flex-wrap gap-2 mb-3">
           {Object.entries(activeBuckets).map(([bucket, color]) => {
-            const totals = chartMode === 'order' ? orderBucketTotals : dropBucketTotals;
+            const totals    = chartMode === 'order' ? orderBucketTotals : dropBucketTotals;
+            const statusMap = chartMode === 'order' ? ORDER_BUCKET_STATUSES : DROP_BUCKET_STATUSES;
             return totals[bucket] ? (
               <div key={bucket} className="flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs border"
                 style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
                 <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} />
                 {bucket}: {fmt$(totals[bucket])}
+                <InfoTip statuses={statusMap[bucket] || []} color={color} />
               </div>
             ) : null;
           })}
@@ -314,14 +379,22 @@ export default function ForecastPage() {
                 {/* Order stage columns */}
                 {Object.entries(ORDER_BUCKETS).map(([b, c]) => (
                   <th key={`o_${b}`} className="text-left px-3 py-2 text-xs font-semibold whitespace-nowrap"
-                    style={{ color: c, borderBottom: '1px solid var(--border)', opacity: 0.9 }}>{b}</th>
+                    style={{ color: c, borderBottom: '1px solid var(--border)', opacity: 0.9 }}>
+                    <span className="flex items-center gap-0.5">
+                      {b}<InfoTip statuses={ORDER_BUCKET_STATUSES[b] || []} color={c} />
+                    </span>
+                  </th>
                 ))}
                 {/* Divider */}
                 <th className="px-1" style={{ borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--border)' }} />
                 {/* Drop status columns */}
                 {Object.entries(DROP_BUCKETS).map(([b, c]) => (
                   <th key={`d_${b}`} className="text-left px-3 py-2 text-xs font-semibold whitespace-nowrap"
-                    style={{ color: c, borderBottom: '1px solid var(--border)', opacity: 0.9 }}>{b}</th>
+                    style={{ color: c, borderBottom: '1px solid var(--border)', opacity: 0.9 }}>
+                    <span className="flex items-center gap-0.5">
+                      {b}<InfoTip statuses={DROP_BUCKET_STATUSES[b] || []} color={c} />
+                    </span>
+                  </th>
                 ))}
                 <th className="text-left px-3 py-2 text-xs font-semibold" style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>Proj. Deposit</th>
               </tr>
