@@ -30,19 +30,15 @@ async function scrapeUSPS() {
     await page.getByTestId('fr-field-callback_2').getByTestId('input-').fill(pass);
     await page.getByRole('button', { name: 'Sign In' }).click();
 
-    // Wait for login to complete — either the dashboard loads or an error appears
-    await page.waitForLoadState('networkidle', { timeout: 60000 });
+    // Wait for the post-login dashboard — "Manage Account" appears once logged in
+    console.log('Waiting for post-login dashboard...');
+    await page.getByText('Manage Account', { timeout: 60000 }).waitFor({ state: 'visible' });
     const currentUrl = page.url();
     console.log('Post-login URL:', currentUrl);
-
-    // Check for login errors
-    const errorText = await page.locator('.error, .alert, [class*="error"], [class*="alert"]').first().textContent({ timeout: 2000 }).catch(() => null);
-    if (errorText) console.warn('Possible login error on page:', errorText.trim());
-
     console.log('Logged in successfully');
 
     // Navigate to Mailing Reports
-    await page.getByText('Manage Account', { timeout: 60000 }).click();
+    await page.getByText('Manage Account').click();
     await page.getByRole('link', { name: 'Mailing Reports image of side' }).click();
     console.log('Navigated to Mailing Reports');
 
