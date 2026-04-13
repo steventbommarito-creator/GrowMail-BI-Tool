@@ -69,7 +69,7 @@ export default function CashflowPage() {
 
     const [{ data: txns }, { data: dropData }, { data: projData }] = await Promise.all([
       supabase.from('usps_transactions').select('*').gte('transaction_date', since90).order('transaction_date', { ascending: true }),
-      supabase.from('osprey_mail_drops').select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, is_live_status, postage_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id').or(`drop_est_date.gte.${today},drop_act_date.gte.${since90}`).lte('drop_est_date', in8w),
+      supabase.from('osprey_mail_drops').select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, is_live_status, postage_amount, production_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id').or(`drop_est_date.gte.${today},drop_act_date.gte.${since90}`).lte('drop_est_date', in8w),
       supabase.from('projected_deposits').select('*').eq('is_active', true).order('deposit_date'),
     ]);
 
@@ -145,14 +145,18 @@ export default function CashflowPage() {
     return weeklyNeeds.map(w => {
       const prepay = w.drops.filter(d => (d.payment_amount_applied || 0) > 0);
       const terms = w.drops.filter(d => !d.payment_amount_applied || d.payment_amount_applied === 0);
+
+      // Stripe Expected: prepay customers where ~50% deposit was collected at order —
+      // remaining balance (order_amount - paid) expected at delivery
       const expectedStripe = prepay.reduce((s, d) => {
         const paid = d.payment_amount_applied || 0;
         const total = d.order_amount || 0;
         const pct = total ? paid / total : 0;
-        // If ~50% paid, remaining 50% due on live status
-        return s + (pct > 0.4 && pct < 0.7 ? paid : 0);
+        return s + (pct > 0.4 && pct < 0.7 ? (total - paid) : 0);
       }, 0);
-      const expectedInvoice = terms.reduce((s, d) => s + ((d.mail_drop_amount || 0) - (d.postage_amount || 0)), 0);
+
+      // Invoice Expected: net-terms customers — full production amount (order less postage)
+      const expectedInvoice = terms.reduce((s, d) => s + (d.production_amount || (d.order_amount || 0) - (d.postage_amount || 0)), 0);
 
       const projDeposit = projectedDeposits.find(p => getWeekStart(p.deposit_date) === w.week);
       const epsGap = balance => balance - w.postage < 0;
@@ -381,7 +385,12 @@ export default function CashflowPage() {
                   if (!byDay[key]) byDay[key] = [];
                   byDay[key].push(d);
                 }
-                const dayKeys = Object.keys(byDay).sort();
+                // past-due always first, then chronological
+                const dayKeys = Object.keys(byDay).sort((a, b) => {
+                  if (a === 'past-due') return -1;
+                  if (b === 'past-due') return 1;
+                  return a.localeCompare(b);
+                });
 
                 const exportWeekExcel = () => {
                   exportToExcel((weekData?.drops || []).map(d => ({
@@ -441,7 +450,10 @@ export default function CashflowPage() {
                             const dayDrops = byDay[dayKey];
                             const dayPostage = dayDrops.reduce((s, d) => s + (d.postage_amount || 0), 0);
                             const isDayExpanded = expandedDays[`${r.weekStart}-${dayKey}`];
-                            const label = dayKey === 'past-due' ? '⚠ Past-Due (rolled forward)' : dayLabel(dayKey);
+                            const label = dayKey === 'past-due' ? '⚠ Late Mail (rolled forward)' : dayLabel(dayKey);
+                            const dayDeposit = dayKey !== 'past-due'
+                              ? projectedDeposits.filter(p => p.deposit_date === dayKey).reduce((s, p) => s + p.amount, 0)
+                              : 0;
 
                             const exportDayExcel = () => {
                               exportToExcel(dayDrops.map(d => ({
@@ -471,6 +483,12 @@ export default function CashflowPage() {
                                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                                       {dayDrops.length} drop{dayDrops.length !== 1 ? 's' : ''} · {fmt$(dayPostage)}
                                     </span>
+                                    {dayDeposit > 0 && (
+                                      <span className="text-xs font-medium px-2 py-0.5 rounded"
+                                        style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                                        Expected Deposit: {fmt$(dayDeposit)}
+                                      </span>
+                                    )}
                                   </div>
                                   <button onClick={e => { e.stopPropagation(); exportDayExcel(); }}
                                     className="text-xs px-2 py-0.5 rounded"
