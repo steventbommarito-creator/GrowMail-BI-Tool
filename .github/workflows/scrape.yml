@@ -1,0 +1,29 @@
+name: BI Scraper
+on:
+  schedule:
+    - cron: '0 5 * * *'    # midnight EST
+    - cron: '0 15 * * *'   # 10am EST
+    - cron: '0 17 * * *'   # noon EST
+    - cron: '0 19 * * *'   # 2pm EST
+    - cron: '0 21 * * *'   # 4pm EST
+  workflow_dispatch:         # manual trigger
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: npx playwright install chromium --with-deps
+      - run: node run.js
+        env:
+          OSPREY_URL: ${{ secrets.OSPREY_URL }}
+          OSPREY_USER: ${{ secrets.OSPREY_USER }}
+          OSPREY_PASS: ${{ secrets.OSPREY_PASS }}
+          USPS_USER: ${{ secrets.USPS_USER }}
+          USPS_PASS: ${{ secrets.USPS_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
