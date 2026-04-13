@@ -81,13 +81,15 @@ async function scrapeUSPS() {
 
     console.log('Logged in successfully');
 
-    // Navigate directly to PostalOne mailing reports
-    await page.goto('https://www.uspspostalone.com/postal1/view.cfm');
+    // Navigate through BCG to Mailing Reports (establishes PostalOne session)
+    await page.getByText('Manage Account').waitFor({ state: 'visible', timeout: 15000 });
+    await page.getByText('Manage Account').click();
+    await page.getByRole('link', { name: 'Mailing Reports' }).click();
     await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
-    console.log('Navigated to PostalOne, URL:', page.url());
+    await page.waitForTimeout(3000);
+    console.log('Navigated to Mailing Reports, URL:', page.url());
 
     // Navigate to View Transactions inside the iframe
-    await page.waitForTimeout(2000);
     const mainFrame = page.frame({ name: 'portal_main' });
     if (!mainFrame) throw new Error('Could not find portal_main frame');
     await mainFrame.getByRole('link', { name: 'View Transactions' }).click();
