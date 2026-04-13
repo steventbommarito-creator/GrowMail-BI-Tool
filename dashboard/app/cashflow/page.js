@@ -10,7 +10,13 @@ import { exportToExcel, exportToPDF } from '../../lib/export';
 
 const fmt$ = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtK = (n) => n == null ? '—' : '$' + (Math.abs(n) / 1000).toFixed(1) + 'k';
-const ET = (iso) => iso ? new Date(iso).toLocaleDateString('en-US', { timeZone: 'America/Detroit' }) : '—';
+// Date-only strings (YYYY-MM-DD) must use T12:00:00 — new Date('2026-04-13') is UTC midnight
+// which becomes April 12 at 8pm Eastern, shifting the displayed date one day back.
+const ET = (iso) => {
+  if (!iso) return '—';
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(iso)) ? new Date(iso + 'T12:00:00') : new Date(iso);
+  return d.toLocaleDateString('en-US', { timeZone: 'America/Detroit' });
+};
 
 function addDays(d, n) {
   const r = new Date(d);
