@@ -28,7 +28,7 @@ function LoginForm() {
     setLoading(true);
     const { error: otpError } = await supabase.auth.signInWithOtp({
       email,
-      options: { shouldCreateUser: false },
+      options: { shouldCreateUser: true },
     });
     setLoading(false);
 
