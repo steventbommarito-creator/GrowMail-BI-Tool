@@ -81,6 +81,12 @@ function LoginForm() {
             Access restricted to @growmail.com accounts.
           </div>
         )}
+        {authError === 'expired' && (
+          <div className="mb-4 rounded-lg px-3 py-2 text-sm"
+            style={{ background: 'var(--status-warning-bg, #fef3c7)', color: 'var(--status-warning, #92400e)' }}>
+            That link has expired or was opened in a different browser. Request a new one below.
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
