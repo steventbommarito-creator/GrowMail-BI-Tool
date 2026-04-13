@@ -193,7 +193,7 @@ export default function ForecastPage() {
         .order('transaction_date', { ascending: false })
         .limit(10),
       supabase.from('projected_deposits')
-        .select('*').eq('is_active', true).order('deposit_date'),
+        .select('*').eq('is_active', true).gte('deposit_date', nextWeekStart).order('deposit_date'),
     ]);
 
     setDrops(dropData || []);
