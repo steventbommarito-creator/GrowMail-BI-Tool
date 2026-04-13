@@ -34,17 +34,21 @@ async function scrapeUSPS() {
     await page.waitForTimeout(2000);
     console.log('After BCG click, URL:', page.url());
 
-    // Step 3: Fill in credentials on verified.usps.com
-    // Try multiple selector strategies for the username/password fields
-    const usernameField = page.locator('input[name="IDToken1"], input[type="text"][id*="user"], input[autocomplete="username"], #username').first();
-    const passwordField = page.locator('input[name="IDToken2"], input[type="password"][id*="pass"], input[autocomplete="current-password"], #password').first();
+    // Step 3: Fill in credentials using ForgeRock test IDs
+    console.log('Looking for ForgeRock username field...');
+    const usernameContainer = page.getByTestId('fr-field-callback_1');
+    await usernameContainer.waitFor({ state: 'attached', timeout: 15000 });
+    const usernameInput = usernameContainer.locator('input').first();
+    await usernameInput.waitFor({ state: 'visible', timeout: 15000 });
+    await usernameInput.click();
+    await usernameInput.fill(user);
+    console.log('Username filled, value length:', user.length);
 
-    await usernameField.waitFor({ state: 'visible', timeout: 15000 });
-    await usernameField.fill(user);
-    console.log('Username filled');
-
-    await passwordField.fill(pass);
-    console.log('Password filled');
+    const passwordInput = page.getByTestId('fr-field-callback_2').locator('input').first();
+    await passwordInput.waitFor({ state: 'visible', timeout: 10000 });
+    await passwordInput.click();
+    await passwordInput.fill(pass);
+    console.log('Password filled, value length:', pass.length);
 
     // Step 4: Submit login
     await page.getByRole('button', { name: 'Sign In' }).click();
