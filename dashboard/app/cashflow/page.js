@@ -91,10 +91,12 @@ export default function CashflowPage() {
     return sorted[0]?.ending_balance ?? 0;
   }, [transactions]);
 
-  // LDP Postcard postage override: qty * $0.244
+  // LDP Postcard postage: only applies when DAL [SUBMITTED] + OUTSOURCED or PRODUCTION drop status
   const effectivePostage = (d) => {
     if ((d.product_category || '').toLowerCase().includes('ldp postcard')) {
-      return (d.mail_drop_quantity || 0) * 0.244;
+      const orderOk = (d.order_status || '').toUpperCase() === 'DAL [SUBMITTED]';
+      const dropOk  = ['OUTSOURCED', 'PRODUCTION'].includes((d.drop_status || '').toUpperCase());
+      return (orderOk && dropOk) ? (d.mail_drop_quantity || 0) * 0.244 : 0;
     }
     return d.postage_amount || 0;
   };

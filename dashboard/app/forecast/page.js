@@ -153,10 +153,15 @@ function weekRangeLabel(weekStart) {
   return `${s.getMonth() + 1}/${s.getDate()} – ${e.getMonth() + 1}/${e.getDate()}`;
 }
 
-const effectivePostage = (d) =>
-  (d.product_category || '').toLowerCase().includes('ldp postcard')
-    ? (d.mail_drop_quantity || 0) * 0.244
-    : d.postage_amount || 0;
+// LDP Postcard postage: only applies when DAL [SUBMITTED] + OUTSOURCED or PRODUCTION drop status
+const effectivePostage = (d) => {
+  if ((d.product_category || '').toLowerCase().includes('ldp postcard')) {
+    const orderOk = (d.order_status || '').toUpperCase() === 'DAL [SUBMITTED]';
+    const dropOk  = ['OUTSOURCED', 'PRODUCTION'].includes((d.drop_status || '').toUpperCase());
+    return (orderOk && dropOk) ? (d.mail_drop_quantity || 0) * 0.244 : 0;
+  }
+  return d.postage_amount || 0;
+};
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function ForecastPage() {
