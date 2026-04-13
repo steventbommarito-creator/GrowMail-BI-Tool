@@ -7,6 +7,7 @@ const { aiInsights } = require('./lib/aiInsights');
 const supabase = require('./lib/supabase');
 
 const TRIGGERED_BY = process.env.TRIGGERED_BY || 'cron';
+const SCRAPE_SOURCE = process.env.SCRAPE_SOURCE || 'both';
 
 async function logSync(source, startedAt, result) {
   const completedAt = new Date().toISOString();
@@ -45,31 +46,39 @@ async function main() {
   console.log(`=== BI Scraper run started at ${new Date().toISOString()} (triggered by: ${TRIGGERED_BY}) ===`);
 
   // --- Osprey ---
-  const ospreyStart = new Date().toISOString();
-  try {
-    console.log('\n[Osprey] Starting scrape...');
-    const ospreyPath = await scrapeOsprey();
-    console.log(`[Osprey] Downloaded: ${ospreyPath}`);
-    const result = await insertOsprey(ospreyPath, TRIGGERED_BY);
-    await logSync('osprey', ospreyStart, result);
-    console.log('[Osprey] Done.');
-  } catch (err) {
-    console.error('[Osprey] ERROR:', err.message);
-    await logSync('osprey', ospreyStart, { error: err.message }).catch(() => {});
+  if (SCRAPE_SOURCE === 'both' || SCRAPE_SOURCE === 'osprey') {
+    const ospreyStart = new Date().toISOString();
+    try {
+      console.log('\n[Osprey] Starting scrape...');
+      const ospreyPath = await scrapeOsprey();
+      console.log(`[Osprey] Downloaded: ${ospreyPath}`);
+      const result = await insertOsprey(ospreyPath, TRIGGERED_BY);
+      await logSync('osprey', ospreyStart, result);
+      console.log('[Osprey] Done.');
+    } catch (err) {
+      console.error('[Osprey] ERROR:', err.message);
+      await logSync('osprey', ospreyStart, { error: err.message }).catch(() => {});
+    }
+  } else {
+    console.log('\n[Osprey] Skipped (source=' + SCRAPE_SOURCE + ')');
   }
 
   // --- USPS ---
-  const uspsStart = new Date().toISOString();
-  try {
-    console.log('\n[USPS] Starting scrape...');
-    const uspsPath = await scrapeUSPS();
-    console.log(`[USPS] Downloaded: ${uspsPath}`);
-    const result = await insertUSPS(uspsPath);
-    await logSync('usps', uspsStart, result);
-    console.log('[USPS] Done.');
-  } catch (err) {
-    console.error('[USPS] ERROR:', err.message);
-    await logSync('usps', uspsStart, { error: err.message }).catch(() => {});
+  if (SCRAPE_SOURCE === 'both' || SCRAPE_SOURCE === 'usps') {
+    const uspsStart = new Date().toISOString();
+    try {
+      console.log('\n[USPS] Starting scrape...');
+      const uspsPath = await scrapeUSPS();
+      console.log(`[USPS] Downloaded: ${uspsPath}`);
+      const result = await insertUSPS(uspsPath);
+      await logSync('usps', uspsStart, result);
+      console.log('[USPS] Done.');
+    } catch (err) {
+      console.error('[USPS] ERROR:', err.message);
+      await logSync('usps', uspsStart, { error: err.message }).catch(() => {});
+    }
+  } else {
+    console.log('\n[USPS] Skipped (source=' + SCRAPE_SOURCE + ')');
   }
 
   // --- AI Insights — only at midnight EST (5am UTC) ---
