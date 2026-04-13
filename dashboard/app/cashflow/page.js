@@ -793,7 +793,11 @@ export default function CashflowPage() {
               </tr>
             </thead>
             <tbody>
-              {[...transactions].reverse().slice(0, 30).map((t, i) => (
+              {[...transactions].sort((a, b) => {
+                const dd = new Date(b.transaction_date) - new Date(a.transaction_date);
+                if (dd !== 0) return dd;
+                return Number(b.transaction_number) - Number(a.transaction_number);
+              }).slice(0, 30).map((t, i) => (
                 <tr key={t.id} style={{
                   background: i % 2 === 0 ? 'transparent' : 'var(--surface2)',
                   borderBottom: '1px solid var(--border)',
