@@ -4,8 +4,10 @@ import { createClient } from '../../../lib/supabaseServer';
 export async function POST(request) {
   // Verify user is authenticated
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ ok: false, error: `Auth failed: ${authError?.message || 'no session'}` }, { status: 401 });
+  }
 
   const { source } = await request.json();
   if (!['osprey', 'usps', 'both'].includes(source)) {
@@ -13,28 +15,30 @@ export async function POST(request) {
   }
 
   const token = process.env.GITHUB_TOKEN;
+  if (!token) {
+    return NextResponse.json({ ok: false, error: 'GITHUB_TOKEN env var not set on server' }, { status: 500 });
+  }
+
   const owner = process.env.GITHUB_REPO_OWNER || 'steventbommarito-creator';
   const repo = process.env.GITHUB_REPO_NAME || 'GrowMail-BI-Tool';
 
-  const res = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/actions/workflows/scrape.yml/dispatches`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github+json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        ref: 'main',
-        inputs: { source },
-      }),
-    }
-  );
+  const ghUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/scrape.yml/dispatches`;
+  const res = await fetch(ghUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      ref: 'main',
+      inputs: { source },
+    }),
+  });
 
   if (!res.ok) {
     const text = await res.text();
-    return NextResponse.json({ ok: false, error: text }, { status: 500 });
+    return NextResponse.json({ ok: false, error: `GitHub ${res.status}: ${text}` }, { status: 500 });
   }
 
   // Log to news feed
