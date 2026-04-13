@@ -2,8 +2,17 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '../../lib/supabase';
+import { createClient as createBaseClient } from '@supabase/supabase-js';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Suspense } from 'react';
+
+// Plain client without PKCE — magic links use token_hash instead of code,
+// so they work when opened in a different browser than where they were requested.
+const supabaseNoPKCE = createBaseClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  { auth: { flowType: 'implicit' } }
+);
 
 function LoginForm() {
   const [username, setUsername] = useState('');
@@ -46,7 +55,7 @@ function LoginForm() {
 
     const email = `${trimmed}@growmail.com`;
     setLoading(true);
-    const { error: otpError } = await supabase.auth.signInWithOtp({
+    const { error: otpError } = await supabaseNoPKCE.auth.signInWithOtp({
       email,
       options: {
         shouldCreateUser: true,
