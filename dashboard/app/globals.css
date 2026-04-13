@@ -1,26 +1,88 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* ── Light theme (default) ── */
+:root,
+[data-theme="light"] {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface2: #f0f2f5;
+  --border: #e2e5ea;
+  --text-primary: #1a1d23;
+  --text-secondary: #5c6478;
+  --text-muted: #9aa0b0;
+  --accent: #2d7d46;
+  --accent-light: #e8f5ec;
+  --accent-text: #ffffff;
+
+  --status-ok: #2d7d46;
+  --status-warn: #d97706;
+  --status-concern: #ea580c;
+  --status-critical: #dc2626;
+  --status-ok-bg: #e8f5ec;
+  --status-warn-bg: #fef3c7;
+  --status-concern-bg: #fff0e6;
+  --status-critical-bg: #fef2f2;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* ── Dark theme ── */
+[data-theme="dark"] {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #242736;
+  --border: #2e3348;
+  --text-primary: #e8eaf0;
+  --text-secondary: #8b91a8;
+  --text-muted: #555d78;
+  --accent: #1a7a3c;
+  --accent-light: #0d2e1a;
+  --accent-text: #d4f0de;
+
+  --status-ok: #22c55e;
+  --status-warn: #f59e0b;
+  --status-concern: #f97316;
+  --status-critical: #ef4444;
+  --status-ok-bg: #0d2e1a;
+  --status-warn-bg: #2d1f00;
+  --status-concern-bg: #2d1200;
+  --status-critical-bg: #2d0a0a;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ── Dark Monochromatic theme ── */
+[data-theme="mono"] {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #242736;
+  --border: #2e3348;
+  --text-primary: #e8eaf0;
+  --text-secondary: #8b91a8;
+  --text-muted: #555d78;
+  --accent: #4a5068;
+  --accent-light: #242736;
+  --accent-text: #e8eaf0;
+
+  --status-ok: #8b91a8;
+  --status-warn: #8b91a8;
+  --status-concern: #8b91a8;
+  --status-critical: #8b91a8;
+  --status-ok-bg: #1a1d27;
+  --status-warn-bg: #1a1d27;
+  --status-concern-bg: #1a1d27;
+  --status-critical-bg: #1a1d27;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-geist-sans, Arial, Helvetica, sans-serif);
+  transition: background 0.15s, color 0.15s;
 }
+
+/* Status label helpers for mono theme */
+[data-theme="mono"] .status-ok::before { content: "OK"; }
+[data-theme="mono"] .status-warn::before { content: "WARNING"; }
+[data-theme="mono"] .status-concern::before { content: "CONCERN"; }
+[data-theme="mono"] .status-critical::before { content: "CRITICAL"; }
+[data-theme="mono"] .status-pending::before { content: "PENDING"; }
+[data-theme="mono"] .status-stale::before { content: "STALE"; }
+[data-theme="mono"] .status-missing::before { content: "MISSING"; }
+[data-theme="mono"] .status-failed::before { content: "FAILED"; }
