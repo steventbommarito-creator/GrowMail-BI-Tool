@@ -180,6 +180,13 @@ export default function CashflowPage() {
       });
     }
 
+    // Add running EPS balance to each row
+    let running = currentBalance;
+    for (const r of rows) {
+      running += r.projDeposit - r.postageDue;
+      r.runningBalance = running;
+    }
+
     return [...rows, ...weeklyNeeds.map(w => {
       const prepay = w.drops.filter(d => (d.payment_amount_applied || 0) > 0);
       const terms = w.drops.filter(d => !d.payment_amount_applied || d.payment_amount_applied === 0);
@@ -197,7 +204,7 @@ export default function CashflowPage() {
       const expectedInvoice = terms.reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
 
       const projDeposit = projectedDeposits.find(p => getWeekStart(p.deposit_date) === w.week);
-      const epsGap = balance => balance - w.postage < 0;
+      running += (projDeposit?.amount || 0) - w.postage;
 
       return {
         week: weekLabel(w.week),
@@ -210,9 +217,10 @@ export default function CashflowPage() {
         projDeposit: projDeposit?.amount || 0,
         dropCount: w.drops.length,
         drops: w.drops,
+        runningBalance: running,
       };
     })];
-  }, [weeklyNeeds, pastDueDrops, projectedDeposits]);
+  }, [weeklyNeeds, pastDueDrops, projectedDeposits, currentBalance]);
 
   async function addProjectedDeposit() {
     if (!newDeposit.date || !newDeposit.amount) return;
@@ -413,7 +421,7 @@ export default function CashflowPage() {
             </thead>
             <tbody>
               {accountingRows.map((r, i) => {
-                const isGap = r.postageDue > currentBalance && r.projDeposit === 0;
+                const isGap = r.runningBalance != null && r.runningBalance < 0;
                 const isExpanded = expandedWeeks[r.weekStart];
                 const rowDrops = r.drops || [];
 
