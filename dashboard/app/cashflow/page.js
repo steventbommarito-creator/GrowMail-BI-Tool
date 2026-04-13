@@ -177,27 +177,24 @@ export default function CashflowPage() {
     return Object.values(weeks).sort((a, b) => a.week.localeCompare(b.week)).slice(0, 8);
   }, [drops, today, pastDueDrops]);
 
-  // EPS balance runway chart
+  // EPS balance runway chart — day-by-day for 14 days
   const runwayData = useMemo(() => {
+    const data = [];
     let balance = currentBalance;
-    const data = [{ date: today, balance, projected: false }];
-
-    const events = [];
-    for (const w of weeklyNeeds) {
-      const daysToMidWeek = 3;
-      events.push({ date: addDays(w.week, daysToMidWeek), amount: -(w.postage), type: 'postage' });
-    }
-    for (const p of projectedDeposits) {
-      events.push({ date: p.deposit_date, amount: p.amount, type: 'deposit', label: p.note });
-    }
-    events.sort((a, b) => a.date.localeCompare(b.date));
-
-    for (const e of events) {
-      balance += e.amount;
-      data.push({ date: e.date, balance: +balance.toFixed(2), type: e.type, label: e.label });
+    for (let i = 0; i <= 14; i++) {
+      const date = addDays(today, i);
+      // If dayBalances has events on this date, advance to the post-event balance
+      if (i > 0 && dayBalances[date]) {
+        balance = dayBalances[date].runningBalance;
+      }
+      data.push({
+        date,
+        balance: +balance.toFixed(2),
+        label: new Date(date + 'T12:00:00').toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }),
+      });
     }
     return data;
-  }, [currentBalance, weeklyNeeds, projectedDeposits, today]);
+  }, [currentBalance, dayBalances, today]);
 
   // Accounting weekly table: postage due, expected stripe, expected invoice
   const accountingRows = useMemo(() => {
@@ -436,12 +433,12 @@ export default function CashflowPage() {
       {/* Balance Runway Chart */}
       <div className="rounded-xl p-4 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>
-          EPS Balance Runway — Current + 8 Weeks
+          EPS Balance Runway — Next 14 Days
         </h2>
         <ResponsiveContainer width="100%" height={220}>
           <AreaChart data={runwayData}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-            <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
+            <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
             <YAxis tickFormatter={fmtK} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
             <Tooltip formatter={(v) => fmt$(v)} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
             <ReferenceLine y={0} stroke="var(--status-critical)" strokeDasharray="4 4" />
