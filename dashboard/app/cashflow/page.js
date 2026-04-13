@@ -49,7 +49,7 @@ export default function CashflowPage() {
   const [drops, setDrops] = useState([]);
   const [projectedDeposits, setProjectedDeposits] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [weekView, setWeekView] = useState(null);
+  const [tableViewMode, setTableViewMode] = useState('week'); // 'week' | 'day'
   const [expandedWeeks, setExpandedWeeks] = useState({});
   const [expandedDays, setExpandedDays] = useState({});
   const [showAddDeposit, setShowAddDeposit] = useState(false);
@@ -258,6 +258,35 @@ export default function CashflowPage() {
     })];
   }, [weeklyNeeds, pastDueDrops, projectedDeposits, currentBalance]);
 
+  // Flat day rows for day view — all drops grouped by date, chronological
+  const dayRows = useMemo(() => {
+    const dayMap = {};
+
+    // Late mail → today
+    for (const d of pastDueDrops) {
+      if (!dayMap[today]) dayMap[today] = { drops: [], isLateMail: true };
+      dayMap[today].drops.push({ ...d, _pastDue: true, _effectivePostage: effectivePostage(d) });
+    }
+
+    // Future drops by est date
+    for (const w of weeklyNeeds) {
+      for (const d of w.drops) {
+        if (d._pastDue) continue;
+        const date = d.drop_est_date || 'unknown';
+        if (!dayMap[date]) dayMap[date] = { drops: [], isLateMail: false };
+        dayMap[date].drops.push({ ...d, _effectivePostage: effectivePostage(d) });
+      }
+    }
+
+    return Object.keys(dayMap).sort().map(date => {
+      const { drops: dayDrops, isLateMail } = dayMap[date];
+      const postage = dayDrops.reduce((s, d) => s + (d._effectivePostage || 0), 0);
+      const deposit = projectedDeposits.filter(p => p.deposit_date === date).reduce((s, p) => s + p.amount, 0);
+      const bal = dayBalances[date];
+      return { date, drops: dayDrops, postage, deposit, isLateMail, runningBalance: bal?.runningBalance, isGap: bal?.isGap };
+    });
+  }, [weeklyNeeds, pastDueDrops, projectedDeposits, dayBalances, today]);
+
   async function addProjectedDeposit() {
     if (!newDeposit.date || !newDeposit.amount) return;
     const { error } = await supabase.from('projected_deposits').upsert({
@@ -437,7 +466,21 @@ export default function CashflowPage() {
       <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border)' }}>
         <div className="px-4 py-3 flex items-center justify-between"
           style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
-          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Weekly Accounting View</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Weekly Accounting View</h2>
+            <div className="flex rounded overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+              {['week', 'day'].map(mode => (
+                <button key={mode} onClick={() => setTableViewMode(mode)}
+                  className="text-xs px-2 py-0.5 font-medium"
+                  style={{
+                    background: tableViewMode === mode ? 'var(--accent)' : 'var(--surface2)',
+                    color: tableViewMode === mode ? 'var(--accent-text)' : 'var(--text-secondary)',
+                  }}>
+                  {mode === 'week' ? 'By Week' : 'By Day'}
+                </button>
+              ))}
+            </div>
+          </div>
           <button onClick={exportAccountingExcel} className="text-xs px-2 py-1 rounded"
             style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
             Export All (Excel)
@@ -449,14 +492,98 @@ export default function CashflowPage() {
           <table className="w-full text-sm">
             <thead style={{ background: 'var(--surface2)' }}>
               <tr>
-                {['', 'Week', 'Proj. Deposit', 'Postage Due', 'EPS Balance', 'Stripe Expected', 'Invoice Expected', 'Drops', ''].map((h, i) => (
+                {['', tableViewMode === 'week' ? 'Week' : 'Date', 'Proj. Deposit', 'Postage Due', 'EPS Balance', 'Stripe Expected', 'Invoice Expected', 'Drops', ''].map((h, i) => (
                   <th key={i} className="text-left px-3 py-2 text-xs font-semibold whitespace-nowrap"
                     style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {accountingRows.map((r, i) => {
+              {tableViewMode === 'day' && dayRows.map((r, i) => {
+                const isGap = r.isGap;
+                const isExpanded = expandedDays[`day-${r.date}`];
+                const prepay = r.drops.filter(d => (d.payment_amount_applied || 0) > 0);
+                const terms = r.drops.filter(d => !d.payment_amount_applied || d.payment_amount_applied === 0);
+                const expectedStripe = prepay.reduce((s, d) => {
+                  const paid = d.payment_amount_applied || 0;
+                  const total = d.order_amount || 0;
+                  const pct = total ? paid / total : 0;
+                  return s + (pct > 0.4 && pct < 0.7 ? (total - paid) : 0);
+                }, 0);
+                const expectedInvoice = terms.reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
+
+                return [
+                  <tr key={r.date}
+                    onClick={() => setExpandedDays(s => ({ ...s, [`day-${r.date}`]: !s[`day-${r.date}`] }))}
+                    className="cursor-pointer"
+                    style={{
+                      background: isGap ? 'var(--status-critical-bg)' :
+                                  r.isLateMail ? 'var(--status-warn-bg)' :
+                                  i % 2 === 0 ? 'var(--surface)' : 'var(--surface2)',
+                      borderBottom: isExpanded ? 'none' : '1px solid var(--border)',
+                    }}>
+                    <td className="px-3 py-2.5 text-xs" style={{ color: 'var(--text-muted)', width: 24 }}>
+                      {isExpanded ? '▼' : '▶'}
+                    </td>
+                    <td className="px-3 py-2.5 font-medium whitespace-nowrap" style={{ color: r.isLateMail ? 'var(--status-warn)' : 'var(--text-primary)' }}>
+                      {r.isLateMail ? `⚠ Late Mail · ${dayLabel(r.date)}` : dayLabel(r.date)}
+                    </td>
+                    <td className="px-3 py-2.5" style={{ color: r.deposit > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+                      {r.deposit > 0 ? fmt$(r.deposit) : '—'}
+                    </td>
+                    <td className="px-3 py-2.5" style={{ color: isGap ? 'var(--status-critical)' : 'var(--text-primary)' }}>{fmt$(r.postage)}</td>
+                    <td className="px-3 py-2.5 font-medium" style={{ color: r.runningBalance == null ? 'var(--text-muted)' : isGap ? 'var(--status-critical)' : 'var(--status-ok)' }}>
+                      {r.runningBalance != null ? fmt$(r.runningBalance) : '—'}
+                    </td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--status-ok)' }}>{expectedStripe > 0 ? fmt$(expectedStripe) : '—'}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)' }}>{expectedInvoice > 0 ? fmt$(expectedInvoice) : '—'}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-muted)' }}>{r.drops.length}</td>
+                    <td className="px-3 py-2.5" />
+                  </tr>,
+
+                  isExpanded && (
+                    <tr key={`day-${r.date}-exp`}>
+                      <td colSpan={9} style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)', padding: 0 }}>
+                        <div className="px-8 py-2">
+                          <table className="w-full text-xs">
+                            <thead style={{ background: 'var(--surface)' }}>
+                              <tr>
+                                {['Customer', 'Product', 'Drop ID', 'Status', r.isLateMail ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag'].filter(Boolean).map(h => (
+                                  <th key={h} className="text-left px-3 py-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {r.drops.map((d, di) => (
+                                <tr key={d.mail_drop_id || di} style={{
+                                  background: di % 2 === 0 ? 'transparent' : 'var(--surface)',
+                                  borderTop: '1px solid var(--border)',
+                                }}>
+                                  <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
+                                  <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
+                                  <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_id || '—'}</td>
+                                  <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.drop_status || '—'}</td>
+                                  {r.isLateMail && (
+                                    <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--status-warn)' }}>
+                                      {d.drop_est_date || '—'}
+                                    </td>
+                                  )}
+                                  <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(d._effectivePostage ?? d.postage_amount)}</td>
+                                  <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_quantity?.toLocaleString() || '—'}</td>
+                                  <td className="px-3 py-1.5">
+                                    {d._pastDue && <span className="font-medium" style={{ color: 'var(--status-warn)' }}>PAST DUE</span>}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  ),
+                ];
+              })}
+              {tableViewMode === 'week' && accountingRows.map((r, i) => {
                 const isGap = r.runningBalance != null && r.runningBalance < 0;
                 const isExpanded = expandedWeeks[r.weekStart];
                 const rowDrops = r.drops || [];
