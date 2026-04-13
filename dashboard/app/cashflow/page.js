@@ -152,7 +152,35 @@ export default function CashflowPage() {
 
   // Accounting weekly table: postage due, expected stripe, expected invoice
   const accountingRows = useMemo(() => {
-    return weeklyNeeds.map(w => {
+    const rows = [];
+
+    // Late Mail row — past-due drops pinned to top
+    if (pastDueDrops.length > 0) {
+      const latePostage = pastDueDrops.reduce((s, d) => s + effectivePostage(d), 0);
+      const lateInvoice = pastDueDrops.filter(d => !d.payment_amount_applied || d.payment_amount_applied === 0)
+        .reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
+      const lateStripe = pastDueDrops.filter(d => (d.payment_amount_applied || 0) > 0).reduce((s, d) => {
+        const paid = d.payment_amount_applied || 0;
+        const total = d.order_amount || 0;
+        const pct = total ? paid / total : 0;
+        return s + (pct > 0.4 && pct < 0.7 ? (total - paid) : 0);
+      }, 0);
+      rows.push({
+        week: '⚠ Late Mail',
+        weekStart: 'late-mail',
+        postageDue: latePostage,
+        pastDue: latePostage,
+        expectedStripe: lateStripe,
+        expectedInvoice: lateInvoice,
+        totalExpected: lateStripe + lateInvoice,
+        projDeposit: 0,
+        dropCount: pastDueDrops.length,
+        drops: pastDueDrops.map(d => ({ ...d, _pastDue: true, _effectivePostage: effectivePostage(d) })),
+        isLateMail: true,
+      });
+    }
+
+    return [...rows, ...weeklyNeeds.map(w => {
       const prepay = w.drops.filter(d => (d.payment_amount_applied || 0) > 0);
       const terms = w.drops.filter(d => !d.payment_amount_applied || d.payment_amount_applied === 0);
 
@@ -181,9 +209,10 @@ export default function CashflowPage() {
         totalExpected: expectedStripe + expectedInvoice,
         projDeposit: projDeposit?.amount || 0,
         dropCount: w.drops.length,
+        drops: w.drops,
       };
-    });
-  }, [weeklyNeeds, projectedDeposits]);
+    })];
+  }, [weeklyNeeds, pastDueDrops, projectedDeposits]);
 
   async function addProjectedDeposit() {
     if (!newDeposit.date || !newDeposit.amount) return;
@@ -386,11 +415,11 @@ export default function CashflowPage() {
               {accountingRows.map((r, i) => {
                 const isGap = r.postageDue > currentBalance && r.projDeposit === 0;
                 const isExpanded = expandedWeeks[r.weekStart];
-                const weekData = weeklyNeeds.find(w => w.week === r.weekStart);
+                const rowDrops = r.drops || [];
 
                 // Group drops by day
                 const byDay = {};
-                for (const d of (weekData?.drops || [])) {
+                for (const d of rowDrops) {
                   const key = d._pastDue ? 'past-due' : (d.drop_est_date || 'unknown');
                   if (!byDay[key]) byDay[key] = [];
                   byDay[key].push(d);
@@ -403,7 +432,7 @@ export default function CashflowPage() {
                 });
 
                 const exportWeekExcel = () => {
-                  exportToExcel((weekData?.drops || []).map(d => ({
+                  exportToExcel(rowDrops.map(d => ({
                     'Customer': d.customer_name || '',
                     'Product': d.product_category || '',
                     'Drop ID': d.mail_drop_id || '',
@@ -430,9 +459,8 @@ export default function CashflowPage() {
                     <td className="px-3 py-2.5 text-xs" style={{ color: 'var(--text-muted)', width: 24 }}>
                       {isExpanded ? '▼' : '▶'}
                     </td>
-                    <td className="px-3 py-2.5 font-medium whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>
-                      {weekRangeLabel(r.weekStart)}
-                      {r.pastDue > 0 && <span className="ml-2 text-xs" style={{ color: 'var(--status-warn)' }}>⚠ past-due</span>}
+                    <td className="px-3 py-2.5 font-medium whitespace-nowrap" style={{ color: r.isLateMail ? 'var(--status-warn)' : 'var(--text-primary)' }}>
+                      {r.isLateMail ? r.week : weekRangeLabel(r.weekStart)}
                     </td>
                     <td className="px-3 py-2.5" style={{ color: isGap ? 'var(--status-critical)' : 'var(--text-primary)' }}>{fmt$(r.postageDue)}</td>
                     <td className="px-3 py-2.5" style={{ color: 'var(--status-ok)' }}>{fmt$(r.expectedStripe)}</td>
@@ -512,7 +540,7 @@ export default function CashflowPage() {
                                   <table className="w-full text-xs">
                                     <thead style={{ background: 'var(--surface2)' }}>
                                       <tr>
-                                        {['Customer', 'Product', 'Drop ID', 'Status', 'Postage', 'Pieces', 'Flag'].map(h => (
+                                        {['Customer', 'Product', 'Drop ID', 'Status', r.isLateMail ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag'].filter(Boolean).map(h => (
                                           <th key={h} className="text-left px-3 py-1.5 font-medium"
                                             style={{ color: 'var(--text-muted)' }}>{h}</th>
                                         ))}
@@ -528,6 +556,11 @@ export default function CashflowPage() {
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_id || '—'}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.drop_status || '—'}</td>
+                                          {r.isLateMail && (
+                                            <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--status-warn)' }}>
+                                              {d.drop_est_date || '—'}
+                                            </td>
+                                          )}
                                           <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(d._effectivePostage ?? d.postage_amount)}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_quantity?.toLocaleString() || '—'}</td>
                                           <td className="px-3 py-1.5">
