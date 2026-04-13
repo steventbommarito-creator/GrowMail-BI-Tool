@@ -185,7 +185,7 @@ export default function ForecastPage() {
       supabase.from('osprey_mail_drops')
         .select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, postage_amount, mail_drop_quantity, mail_drop_amount, order_amount, payment_amount_applied')
         .in('order_status', FORECAST_STATUSES)
-        .gte('drop_est_date', nextWeekStart)   // ← next week and beyond only
+        .gte('drop_est_date', today)           // ← from today (KPI includes current week)
         .lte('drop_est_date', in12w),
       supabase.from('usps_transactions')
         .select('transaction_number, transaction_date, ending_balance')
@@ -237,12 +237,13 @@ export default function ForecastPage() {
     Object.fromEntries(productCategories.map(({ cat, color }) => [cat, color])),
   [productCategories]);
 
-  // ── Weekly breakdown — order, drop, AND product buckets ───────────────────
+  // ── Weekly breakdown — order, drop, AND product buckets (chart: next week+) ─
   const weeklyBreakdown = useMemo(() => {
     const weekMap = {};
     for (const d of drops) {
       if (!d.drop_est_date) continue;
       const ws = getWeekStart(d.drop_est_date);
+      if (ws < nextWeekStart) continue; // chart starts next week; current week only in KPI totals
       if (!weekMap[ws]) weekMap[ws] = { week: ws, label: weekRangeLabel(ws), total: 0 };
       const p  = effectivePostage(d);
       weekMap[ws].total += p;
