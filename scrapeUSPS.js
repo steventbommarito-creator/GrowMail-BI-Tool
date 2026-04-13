@@ -3,8 +3,8 @@ const path = require('path');
 const os = require('os');
 
 /**
- * Logs into the USPS BCG portal, navigates to mailing reports,
- * downloads the transactions CSV, and returns the local file path.
+ * Logs into the USPS BCG portal, navigates to the EPS Transaction History Report,
+ * downloads the CSV, and returns the local file path.
  *
  * Required environment variables:
  *   USPS_USER — BCG username
@@ -38,19 +38,18 @@ async function scrapeUSPS() {
   });
 
   try {
-    // Step 1: Load the BCG gateway page
+    // Step 1: Load BCG gateway
     await page.goto('https://gateway.usps.com/eAdmin/view/signin');
     await page.waitForLoadState('domcontentloaded');
-    console.log('Gateway page loaded, URL:', page.url());
+    console.log('Gateway page loaded');
 
-    // Step 2: Click "Sign in to the BCG" — this navigates to verified.usps.com
+    // Step 2: Click "Sign in to the BCG" → navigates to verified.usps.com
     await page.getByRole('button', { name: 'Sign in to the BCG' }).click();
     await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
     await page.waitForTimeout(2000);
     console.log('After BCG click, URL:', page.url());
 
-    // Step 3: Fill in credentials using ForgeRock test IDs
-    // Step 3: Fill credentials — use pressSequentially to trigger React events
+    // Step 3: Fill credentials with pressSequentially to trigger React events
     console.log('Looking for ForgeRock username field...');
     const usernameContainer = page.getByTestId('fr-field-callback_1');
     await usernameContainer.waitFor({ state: 'attached', timeout: 15000 });
@@ -58,65 +57,46 @@ async function scrapeUSPS() {
     await usernameInput.waitFor({ state: 'visible', timeout: 15000 });
     await usernameInput.click();
     await usernameInput.pressSequentially(user, { delay: 80 });
-    console.log('Username typed, length:', user.length);
+    console.log('Username typed');
 
     const passwordInput = page.getByTestId('fr-field-callback_2').locator('input').first();
     await passwordInput.waitFor({ state: 'visible', timeout: 10000 });
     await passwordInput.click();
     await passwordInput.pressSequentially(pass, { delay: 80 });
-    console.log('Password typed, length:', pass.length);
+    console.log('Password typed');
 
-    // Step 4: Submit login
+    // Step 4: Submit
     await page.getByRole('button', { name: 'Sign In' }).click();
     await page.waitForTimeout(1000);
 
-    // Wait for redirect back to gateway
+    // Wait for BCG dashboard
     console.log('Waiting for post-login navigation...');
     await page.waitForLoadState('domcontentloaded', { timeout: 60000 });
     await page.waitForTimeout(3000);
-    const currentUrl = page.url();
-    const pageTitle = await page.title();
-    console.log('Post-login URL:', currentUrl);
-    console.log('Post-login title:', pageTitle);
-
+    console.log('Post-login URL:', page.url());
     console.log('Logged in successfully');
 
-    // Navigate through BCG to Mailing Reports (establishes PostalOne session)
-    await page.getByText('Manage Account').waitFor({ state: 'visible', timeout: 15000 });
-    await page.getByText('Manage Account').click();
-    await page.getByRole('link', { name: 'Mailing Reports' }).click();
+    // Step 5: Navigate directly to EPS Transaction History Report
+    console.log('Navigating to EPS Transaction History...');
+    await page.goto('https://epay.usps.com/paymod/reports/transaction/history');
     await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
+    await page.waitForTimeout(2000);
+    console.log('EPS report page loaded, URL:', page.url());
+
+    // Step 6: Click "Generate results"
+    await page.getByRole('button', { name: 'Generate results' }).waitFor({ state: 'visible', timeout: 15000 });
+    await page.getByRole('button', { name: 'Generate results' }).click();
+    console.log('Generate results clicked');
+
+    // Wait for results table to appear
     await page.waitForTimeout(3000);
-    console.log('Navigated to Mailing Reports, URL:', page.url());
 
-    // Navigate to View Transactions inside the iframe
-    const mainFrame = page.frame({ name: 'portal_main' });
-    if (!mainFrame) throw new Error('Could not find portal_main frame');
-    await mainFrame.getByRole('link', { name: 'View Transactions' }).click();
-    console.log('Opened View Transactions');
-
-    // Run the search
-    await mainFrame.getByRole('button', { name: 'SEARCH' }).click();
-    await mainFrame.getByRole('link', { name: 'DOWNLOAD' }).waitFor({ state: 'visible' });
-    await mainFrame.waitForLoadState('networkidle');
-    console.log('Search executed, results loaded');
-
-    // Click Download and handle the popup
-    const popupPromise = page.waitForEvent('popup');
-    await mainFrame.getByRole('link', { name: 'DOWNLOAD' }).click();
-    const popup = await popupPromise;
-    await popup.waitForLoadState('networkidle');
-    console.log('Download popup opened');
-
-    // Select CSV format and download
-    await popup.getByRole('cell', { name: 'Comma Separated Values (CSV)' }).click();
-    await popup.getByRole('row', { name: 'Comma Separated Values (CSV)' }).getByRole('radio').check();
-
-    const downloadPromise = popup.waitForEvent('download');
-    await popup.getByRole('button', { name: 'Download' }).click();
+    // Step 7: Download CSV
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'CSV' }).click();
     const download = await downloadPromise;
 
-    const filePath = path.join(os.tmpdir(), download.suggestedFilename());
+    const filePath = path.join(os.tmpdir(), download.suggestedFilename() || 'usps_transactions.csv');
     await download.saveAs(filePath);
     console.log(`CSV downloaded to ${filePath}`);
 
