@@ -332,9 +332,8 @@ export default function ForecastPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         {[
-          { label: 'Current EPS Balance', value: fmt$(currentBalance), color: currentBalance < 0 ? 'var(--status-critical)' : 'var(--status-ok)' },
           { label: 'Total Postage in Pipeline', value: fmt$(totalPostage) },
           { label: 'Total Pieces', value: totalPieces.toLocaleString() },
           { label: 'Total Drops', value: drops.length.toLocaleString() },
