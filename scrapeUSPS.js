@@ -23,26 +23,40 @@ async function scrapeUSPS() {
   const page = await context.newPage();
 
   try {
-    // Log in
+    // Step 1: Load the BCG gateway page
     await page.goto('https://gateway.usps.com/eAdmin/view/signin');
+    await page.waitForLoadState('domcontentloaded');
+    console.log('Gateway page loaded, URL:', page.url());
+
+    // Step 2: Click "Sign in to the BCG" — this navigates to verified.usps.com
     await page.getByRole('button', { name: 'Sign in to the BCG' }).click();
-    await page.getByTestId('fr-field-callback_1').getByTestId('input-').fill(user);
-    await page.getByTestId('fr-field-callback_2').getByTestId('input-').fill(pass);
+    await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
+    await page.waitForTimeout(2000);
+    console.log('After BCG click, URL:', page.url());
+
+    // Step 3: Fill in credentials on verified.usps.com
+    // Try multiple selector strategies for the username/password fields
+    const usernameField = page.locator('input[name="IDToken1"], input[type="text"][id*="user"], input[autocomplete="username"], #username').first();
+    const passwordField = page.locator('input[name="IDToken2"], input[type="password"][id*="pass"], input[autocomplete="current-password"], #password').first();
+
+    await usernameField.waitFor({ state: 'visible', timeout: 15000 });
+    await usernameField.fill(user);
+    console.log('Username filled');
+
+    await passwordField.fill(pass);
+    console.log('Password filled');
+
+    // Step 4: Submit login
     await page.getByRole('button', { name: 'Sign In' }).click();
 
-    // Wait for navigation away from the sign-in page
+    // Wait for redirect back to gateway
     console.log('Waiting for post-login navigation...');
     await page.waitForLoadState('domcontentloaded', { timeout: 60000 });
-    await page.waitForTimeout(3000); // allow JS to finish rendering
+    await page.waitForTimeout(3000);
     const currentUrl = page.url();
     const pageTitle = await page.title();
     console.log('Post-login URL:', currentUrl);
     console.log('Post-login title:', pageTitle);
-
-    // Log visible page text to diagnose login failures
-    const bodyText = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '');
-    const snippet = bodyText.replace(/\s+/g, ' ').slice(0, 500);
-    console.log('Page body snippet:', snippet);
 
     // Wait for the post-login dashboard — "Manage Account" appears once logged in
     console.log('Waiting for Manage Account...');
