@@ -69,7 +69,7 @@ export default function CashflowPage() {
 
     const [{ data: txns }, { data: dropData }, { data: projData }] = await Promise.all([
       supabase.from('usps_transactions').select('*').gte('transaction_date', since90).order('transaction_date', { ascending: true }),
-      supabase.from('osprey_mail_drops').select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, is_live_status, postage_amount, mail_drop_amount, production_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id').or(`drop_est_date.gte.${today},drop_act_date.gte.${since90}`).lte('drop_est_date', in8w),
+      supabase.from('osprey_mail_drops').select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, is_live_status, postage_amount, mail_drop_amount, production_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id').in('drop_status', ['Outsourced', 'Production', 'Pending Ship']).lte('drop_est_date', in8w),
       supabase.from('projected_deposits').select('*').eq('is_active', true).order('deposit_date'),
     ]);
 
@@ -86,6 +86,14 @@ export default function CashflowPage() {
     return sorted[0]?.ending_balance || 0;
   }, [transactions]);
 
+  // LDP Postcard postage override: qty * $0.244
+  const effectivePostage = (d) => {
+    if ((d.product_category || '').toLowerCase().includes('ldp postcard')) {
+      return (d.mail_drop_quantity || 0) * 0.244;
+    }
+    return d.postage_amount || 0;
+  };
+
   // Past-due drops: live status AND scheduled date is before today
   const today = new Date().toISOString().split('T')[0];
   const pastDueDrops = useMemo(() =>
@@ -101,9 +109,10 @@ export default function CashflowPage() {
     for (const d of pastDueDrops) {
       const w = currentWeekStart;
       if (!weeks[w]) weeks[w] = { week: w, postage: 0, drops: [], pastDue: 0 };
-      weeks[w].postage += d.postage_amount || 0;
-      weeks[w].pastDue += d.postage_amount || 0;
-      weeks[w].drops.push({ ...d, _pastDue: true });
+      const p = effectivePostage(d);
+      weeks[w].postage += p;
+      weeks[w].pastDue += p;
+      weeks[w].drops.push({ ...d, _pastDue: true, _effectivePostage: p });
     }
 
     // Future drops
@@ -111,8 +120,9 @@ export default function CashflowPage() {
       if (!d.drop_est_date || d.drop_act_date || (d.drop_est_date < today && d.is_live_status)) continue;
       const w = getWeekStart(d.drop_est_date);
       if (!weeks[w]) weeks[w] = { week: w, postage: 0, drops: [], pastDue: 0 };
-      weeks[w].postage += d.postage_amount || 0;
-      weeks[w].drops.push(d);
+      const p = effectivePostage(d);
+      weeks[w].postage += p;
+      weeks[w].drops.push({ ...d, _effectivePostage: p });
     }
 
     return Object.values(weeks).sort((a, b) => a.week.localeCompare(b.week)).slice(0, 8);
@@ -518,7 +528,7 @@ export default function CashflowPage() {
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_id || '—'}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.drop_status || '—'}</td>
-                                          <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(d.postage_amount)}</td>
+                                          <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(d._effectivePostage ?? d.postage_amount)}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_quantity?.toLocaleString() || '—'}</td>
                                           <td className="px-3 py-1.5">
                                             {d._pastDue && <span className="font-medium" style={{ color: 'var(--status-warn)' }}>PAST DUE</span>}
