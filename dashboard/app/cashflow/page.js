@@ -23,6 +23,19 @@ function weekLabel(dateStr) {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+function weekRangeLabel(weekStart) {
+  const start = new Date(weekStart + 'T12:00:00');
+  const end = new Date(weekStart + 'T12:00:00');
+  end.setDate(start.getDate() + 6);
+  return `Week of ${start.getMonth() + 1}/${start.getDate()} – ${end.getMonth() + 1}/${end.getDate()}`;
+}
+
+function dayLabel(dateStr) {
+  return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', {
+    timeZone: 'America/Detroit', weekday: 'short', month: 'numeric', day: 'numeric'
+  });
+}
+
 function getWeekStart(dateStr) {
   const d = new Date(dateStr + 'T12:00:00');
   const ws = new Date(d);
@@ -36,7 +49,9 @@ export default function CashflowPage() {
   const [drops, setDrops] = useState([]);
   const [projectedDeposits, setProjectedDeposits] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [weekView, setWeekView] = useState(null); // drill into a week
+  const [weekView, setWeekView] = useState(null);
+  const [expandedWeeks, setExpandedWeeks] = useState({});
+  const [expandedDays, setExpandedDays] = useState({});
   const [showAddDeposit, setShowAddDeposit] = useState(false);
   const [newDeposit, setNewDeposit] = useState({ date: '', amount: '', note: '' });
   const [userEmail, setUserEmail] = useState('');
@@ -331,22 +346,24 @@ export default function CashflowPage() {
         </div>
       )}
 
-      {/* Weekly Accounting Table */}
+      {/* Weekly Accounting Table — Accordion */}
       <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border)' }}>
         <div className="px-4 py-3 flex items-center justify-between"
           style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
           <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Weekly Accounting View</h2>
           <button onClick={exportAccountingExcel} className="text-xs px-2 py-1 rounded"
             style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
-            Export
+            Export All (Excel)
           </button>
         </div>
+
+        {/* Column headers */}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead style={{ background: 'var(--surface2)' }}>
               <tr>
-                {['Week', 'Postage Due', 'Stripe Expected', 'Invoice Expected', 'Total Expected', 'Proj. Deposit', 'Drops'].map(h => (
-                  <th key={h} className="text-left px-3 py-2 text-xs font-semibold"
+                {['', 'Week', 'Postage Due', 'Stripe Expected', 'Invoice Expected', 'Total Expected', 'Proj. Deposit', 'Drops', ''].map((h, i) => (
+                  <th key={i} className="text-left px-3 py-2 text-xs font-semibold whitespace-nowrap"
                     style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
                 ))}
               </tr>
@@ -354,81 +371,158 @@ export default function CashflowPage() {
             <tbody>
               {accountingRows.map((r, i) => {
                 const isGap = r.postageDue > currentBalance && r.projDeposit === 0;
-                return (
+                const isExpanded = expandedWeeks[r.weekStart];
+                const weekData = weeklyNeeds.find(w => w.week === r.weekStart);
+
+                // Group drops by day
+                const byDay = {};
+                for (const d of (weekData?.drops || [])) {
+                  const key = d._pastDue ? 'past-due' : (d.drop_est_date || 'unknown');
+                  if (!byDay[key]) byDay[key] = [];
+                  byDay[key].push(d);
+                }
+                const dayKeys = Object.keys(byDay).sort();
+
+                const exportWeekExcel = () => {
+                  exportToExcel((weekData?.drops || []).map(d => ({
+                    'Customer': d.customer_name || '',
+                    'Product': d.product_category || '',
+                    'Drop ID': d.mail_drop_id || '',
+                    'Order ID': d.order_id || '',
+                    'Est. Date': d.drop_est_date || '',
+                    'Status': d.drop_status || '',
+                    'Postage': d.postage_amount || 0,
+                    'Pieces': d.mail_drop_quantity || 0,
+                    'Past-Due': d._pastDue ? 'Yes' : 'No',
+                  })), `week-${r.weekStart}`, r.weekStart);
+                };
+
+                return [
+                  // Main week row
                   <tr key={r.weekStart}
-                    onClick={() => setWeekView(weekView === r.weekStart ? null : r.weekStart)}
-                    className="cursor-pointer transition-colors"
+                    onClick={() => setExpandedWeeks(s => ({ ...s, [r.weekStart]: !s[r.weekStart] }))}
+                    className="cursor-pointer"
                     style={{
                       background: isGap ? 'var(--status-critical-bg)' :
                                   r.pastDue > 0 ? 'var(--status-warn-bg)' :
                                   i % 2 === 0 ? 'var(--surface)' : 'var(--surface2)',
-                      borderBottom: '1px solid var(--border)',
+                      borderBottom: isExpanded ? 'none' : '1px solid var(--border)',
                     }}>
-                    <td className="px-3 py-2 font-medium" style={{ color: 'var(--text-primary)' }}>
-                      {r.week}
+                    <td className="px-3 py-2.5 text-xs" style={{ color: 'var(--text-muted)', width: 24 }}>
+                      {isExpanded ? '▼' : '▶'}
+                    </td>
+                    <td className="px-3 py-2.5 font-medium whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>
+                      {weekRangeLabel(r.weekStart)}
                       {r.pastDue > 0 && <span className="ml-2 text-xs" style={{ color: 'var(--status-warn)' }}>⚠ past-due</span>}
                     </td>
-                    <td className="px-3 py-2" style={{ color: isGap ? 'var(--status-critical)' : 'var(--text-primary)' }}>{fmt$(r.postageDue)}</td>
-                    <td className="px-3 py-2" style={{ color: 'var(--status-ok)' }}>{fmt$(r.expectedStripe)}</td>
-                    <td className="px-3 py-2" style={{ color: 'var(--text-secondary)' }}>{fmt$(r.expectedInvoice)}</td>
-                    <td className="px-3 py-2 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(r.totalExpected)}</td>
-                    <td className="px-3 py-2" style={{ color: r.projDeposit > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+                    <td className="px-3 py-2.5" style={{ color: isGap ? 'var(--status-critical)' : 'var(--text-primary)' }}>{fmt$(r.postageDue)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--status-ok)' }}>{fmt$(r.expectedStripe)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)' }}>{fmt$(r.expectedInvoice)}</td>
+                    <td className="px-3 py-2.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(r.totalExpected)}</td>
+                    <td className="px-3 py-2.5" style={{ color: r.projDeposit > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
                       {r.projDeposit > 0 ? fmt$(r.projDeposit) : '—'}
                     </td>
-                    <td className="px-3 py-2" style={{ color: 'var(--text-muted)' }}>{r.dropCount}</td>
-                  </tr>
-                );
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-muted)' }}>{r.dropCount}</td>
+                    <td className="px-3 py-2.5">
+                      <button onClick={e => { e.stopPropagation(); exportWeekExcel(); }}
+                        className="text-xs px-2 py-0.5 rounded whitespace-nowrap"
+                        style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+                        Export Week
+                      </button>
+                    </td>
+                  </tr>,
+
+                  // Expanded: day accordions
+                  isExpanded && (
+                    <tr key={`${r.weekStart}-expanded`}>
+                      <td colSpan={9} style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)', padding: 0 }}>
+                        <div className="px-8 py-3 space-y-2">
+                          {dayKeys.map(dayKey => {
+                            const dayDrops = byDay[dayKey];
+                            const dayPostage = dayDrops.reduce((s, d) => s + (d.postage_amount || 0), 0);
+                            const isDayExpanded = expandedDays[`${r.weekStart}-${dayKey}`];
+                            const label = dayKey === 'past-due' ? '⚠ Past-Due (rolled forward)' : dayLabel(dayKey);
+
+                            const exportDayExcel = () => {
+                              exportToExcel(dayDrops.map(d => ({
+                                'Customer': d.customer_name || '',
+                                'Product': d.product_category || '',
+                                'Drop ID': d.mail_drop_id || '',
+                                'Order ID': d.order_id || '',
+                                'Est. Date': d.drop_est_date || '',
+                                'Status': d.drop_status || '',
+                                'Postage': d.postage_amount || 0,
+                                'Pieces': d.mail_drop_quantity || 0,
+                              })), `drops-${dayKey}`, dayKey);
+                            };
+
+                            return (
+                              <div key={dayKey} className="rounded border overflow-hidden"
+                                style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
+                                {/* Day header */}
+                                <div className="flex items-center justify-between px-3 py-2 cursor-pointer"
+                                  onClick={() => setExpandedDays(s => ({ ...s, [`${r.weekStart}-${dayKey}`]: !s[`${r.weekStart}-${dayKey}`] }))}
+                                  style={{ borderBottom: isDayExpanded ? '1px solid var(--border)' : 'none' }}>
+                                  <div className="flex items-center gap-3">
+                                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{isDayExpanded ? '▼' : '▶'}</span>
+                                    <span className="text-sm font-medium" style={{ color: dayKey === 'past-due' ? 'var(--status-warn)' : 'var(--text-primary)' }}>
+                                      {label}
+                                    </span>
+                                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                                      {dayDrops.length} drop{dayDrops.length !== 1 ? 's' : ''} · {fmt$(dayPostage)}
+                                    </span>
+                                  </div>
+                                  <button onClick={e => { e.stopPropagation(); exportDayExcel(); }}
+                                    className="text-xs px-2 py-0.5 rounded"
+                                    style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+                                    Export Day
+                                  </button>
+                                </div>
+
+                                {/* Day drops table */}
+                                {isDayExpanded && (
+                                  <table className="w-full text-xs">
+                                    <thead style={{ background: 'var(--surface2)' }}>
+                                      <tr>
+                                        {['Customer', 'Product', 'Drop ID', 'Status', 'Postage', 'Pieces', 'Flag'].map(h => (
+                                          <th key={h} className="text-left px-3 py-1.5 font-medium"
+                                            style={{ color: 'var(--text-muted)' }}>{h}</th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {dayDrops.map((d, di) => (
+                                        <tr key={d.mail_drop_id || di} style={{
+                                          background: di % 2 === 0 ? 'transparent' : 'var(--surface2)',
+                                          borderTop: '1px solid var(--border)',
+                                        }}>
+                                          <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
+                                          <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
+                                          <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_id || '—'}</td>
+                                          <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.drop_status || '—'}</td>
+                                          <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(d.postage_amount)}</td>
+                                          <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_quantity?.toLocaleString() || '—'}</td>
+                                          <td className="px-3 py-1.5">
+                                            {d._pastDue && <span className="font-medium" style={{ color: 'var(--status-warn)' }}>PAST DUE</span>}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  ),
+                ];
               })}
             </tbody>
           </table>
         </div>
       </div>
-
-      {/* Week drill-down */}
-      {weekView && (() => {
-        const weekData = weeklyNeeds.find(w => w.week === weekView);
-        if (!weekData) return null;
-        return (
-          <div className="rounded-xl border" style={{ background: 'var(--surface)', borderColor: 'var(--accent)' }}>
-            <div className="px-4 py-3 flex items-center justify-between"
-              style={{ borderBottom: '1px solid var(--border)' }}>
-              <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-                Week of {weekLabel(weekView)} — Drop Detail
-              </h2>
-              <button onClick={() => setWeekView(null)} style={{ color: 'var(--text-muted)' }} className="text-lg">×</button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead style={{ background: 'var(--surface2)' }}>
-                  <tr>
-                    {['Customer', 'Product', 'Est. Date', 'Status', 'Postage', 'Pieces', 'Past-Due'].map(h => (
-                      <th key={h} className="text-left px-3 py-2 font-medium" style={{ color: 'var(--text-muted)' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {weekData.drops.map((d, i) => (
-                    <tr key={d.mail_drop_id || i} style={{
-                      background: i % 2 === 0 ? 'transparent' : 'var(--surface2)',
-                      borderBottom: '1px solid var(--border)',
-                    }}>
-                      <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
-                      <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
-                      <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{ET(d.drop_est_date)}</td>
-                      <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.drop_status || '—'}</td>
-                      <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(d.postage_amount)}</td>
-                      <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_quantity?.toLocaleString() || '—'}</td>
-                      <td className="px-3 py-1.5">
-                        {d._pastDue && <span className="text-xs font-medium" style={{ color: 'var(--status-warn)' }}>PAST DUE</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
-      })()}
 
       {/* Recent EPS Transactions */}
       <div className="rounded-xl border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
