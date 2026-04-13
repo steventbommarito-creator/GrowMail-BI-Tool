@@ -100,6 +100,42 @@ export default function CashflowPage() {
     drops.filter(d => d.is_live_status && d.drop_est_date < today && !d.drop_act_date),
     [drops, today]);
 
+  // Running EPS balance by day — used to highlight the day balance runs out
+  const dayBalances = useMemo(() => {
+    const dayMap = {};
+
+    // Past-due drops → today
+    for (const d of pastDueDrops) {
+      if (!dayMap[today]) dayMap[today] = { postage: 0, deposits: 0 };
+      dayMap[today].postage += effectivePostage(d);
+    }
+
+    // Future drops by est date
+    for (const d of drops) {
+      if (!d.is_live_status || d.drop_act_date || d.drop_est_date < today) continue;
+      const date = d.drop_est_date;
+      if (!dayMap[date]) dayMap[date] = { postage: 0, deposits: 0 };
+      dayMap[date].postage += effectivePostage(d);
+    }
+
+    // Projected deposits
+    for (const p of projectedDeposits) {
+      const date = p.deposit_date;
+      if (!dayMap[date]) dayMap[date] = { postage: 0, deposits: 0 };
+      dayMap[date].deposits += p.amount;
+    }
+
+    // Compute running balance in chronological order
+    const sorted = Object.keys(dayMap).sort();
+    let balance = currentBalance;
+    const result = {};
+    for (const date of sorted) {
+      balance += dayMap[date].deposits - dayMap[date].postage;
+      result[date] = { runningBalance: +balance.toFixed(2), isGap: balance < 0 };
+    }
+    return result;
+  }, [drops, pastDueDrops, projectedDeposits, currentBalance, today]);
+
   // Weekly postage needs (8 weeks forward + past-due rolled into current week)
   const weeklyNeeds = useMemo(() => {
     const weeks = {};
@@ -500,6 +536,9 @@ export default function CashflowPage() {
                             const dayDeposit = dayKey !== 'past-due'
                               ? projectedDeposits.filter(p => p.deposit_date === dayKey).reduce((s, p) => s + p.amount, 0)
                               : 0;
+                            const balanceKey = dayKey === 'past-due' ? today : dayKey;
+                            const dayBal = dayBalances[balanceKey];
+                            const dayIsGap = dayBal?.isGap;
 
                             const exportDayExcel = () => {
                               exportToExcel(dayDrops.map(d => ({
@@ -516,19 +555,25 @@ export default function CashflowPage() {
 
                             return (
                               <div key={dayKey} className="rounded border overflow-hidden"
-                                style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
+                                style={{ borderColor: dayIsGap ? 'var(--status-critical)' : 'var(--border)', background: dayIsGap ? 'var(--status-critical-bg)' : 'var(--surface)' }}>
                                 {/* Day header */}
                                 <div className="flex items-center justify-between px-3 py-2 cursor-pointer"
                                   onClick={() => setExpandedDays(s => ({ ...s, [`${r.weekStart}-${dayKey}`]: !s[`${r.weekStart}-${dayKey}`] }))}
                                   style={{ borderBottom: isDayExpanded ? '1px solid var(--border)' : 'none' }}>
                                   <div className="flex items-center gap-3">
                                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{isDayExpanded ? '▼' : '▶'}</span>
-                                    <span className="text-sm font-medium" style={{ color: dayKey === 'past-due' ? 'var(--status-warn)' : 'var(--text-primary)' }}>
+                                    <span className="text-sm font-medium" style={{ color: dayIsGap ? 'var(--status-critical)' : dayKey === 'past-due' ? 'var(--status-warn)' : 'var(--text-primary)' }}>
                                       {label}
                                     </span>
                                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                                       {dayDrops.length} drop{dayDrops.length !== 1 ? 's' : ''} · {fmt$(dayPostage)}
                                     </span>
+                                    {dayBal && (
+                                      <span className="text-xs font-medium px-2 py-0.5 rounded"
+                                        style={{ background: dayIsGap ? 'var(--status-critical-bg)' : 'var(--surface2)', color: dayIsGap ? 'var(--status-critical)' : 'var(--text-muted)', border: '1px solid var(--border)' }}>
+                                        EPS after: {fmt$(dayBal.runningBalance)}
+                                      </span>
+                                    )}
                                     {dayDeposit > 0 && (
                                       <span className="text-xs font-medium px-2 py-0.5 rounded"
                                         style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
