@@ -12,6 +12,7 @@ export default function Nav() {
   const { theme, setTheme } = useTheme();
   const [unread, setUnread] = useState(0);
   const [triggerStatus, setTriggerStatus] = useState({});
+  const [triggerError, setTriggerError] = useState({});
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const themeRef = useRef(null);
 
@@ -54,6 +55,7 @@ export default function Nav() {
 
   async function triggerScraper(source) {
     setTriggerStatus(s => ({ ...s, [source]: 'running' }));
+    setTriggerError(s => ({ ...s, [source]: null }));
     try {
       const res = await fetch('/api/trigger', {
         method: 'POST',
@@ -61,9 +63,18 @@ export default function Nav() {
         body: JSON.stringify({ source }),
       });
       const data = await res.json();
-      setTriggerStatus(s => ({ ...s, [source]: data.ok ? 'done' : 'error' }));
-    } catch {
+      if (data.ok) {
+        setTriggerStatus(s => ({ ...s, [source]: 'done' }));
+      } else {
+        setTriggerStatus(s => ({ ...s, [source]: 'error' }));
+        setTriggerError(s => ({ ...s, [source]: data.error || 'Unknown error' }));
+        console.error(`Trigger ${source} failed:`, data.error);
+        alert(`Sync ${source.toUpperCase()} failed:\n${data.error}`);
+      }
+    } catch (err) {
       setTriggerStatus(s => ({ ...s, [source]: 'error' }));
+      setTriggerError(s => ({ ...s, [source]: err.message }));
+      alert(`Sync ${source.toUpperCase()} error:\n${err.message}`);
     }
     setTimeout(() => setTriggerStatus(s => ({ ...s, [source]: 'idle' })), 4000);
   }
