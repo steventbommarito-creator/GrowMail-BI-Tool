@@ -69,7 +69,7 @@ export default function CashflowPage() {
 
     const [{ data: txns }, { data: dropData }, { data: projData }] = await Promise.all([
       supabase.from('usps_transactions').select('*').gte('transaction_date', since90).order('transaction_date', { ascending: true }),
-      supabase.from('osprey_mail_drops').select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, mail_drop_amount, production_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id').in('order_status', ['DAL Submitted', 'Digital Ready', 'Digital Staging', 'Outsourced', 'Outsourced Staging']).lte('drop_est_date', in8w),
+      supabase.from('osprey_mail_drops').select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, mail_drop_amount, production_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id').in('order_status', ['DAL [SUBMITTED]', 'DIGITAL READY', 'DIGITAL [STAGING]', 'OUTSOURCED', 'OUTSOURCED [STAGING]']).lte('drop_est_date', in8w),
       supabase.from('projected_deposits').select('*').eq('is_active', true).order('deposit_date'),
     ]);
 
@@ -82,9 +82,13 @@ export default function CashflowPage() {
   // Current EPS balance = last ending_balance in transactions
   const currentBalance = useMemo(() => {
     if (!transactions.length) return 0;
-    // Sort by transaction_number descending (EPS assigns sequential IDs — highest = most recent)
-    const sorted = [...transactions].sort((a, b) => Number(b.transaction_number) - Number(a.transaction_number));
-    return sorted[0]?.ending_balance || 0;
+    // Primary sort: date DESC. Secondary: transaction_number DESC (EPS sequential IDs) as tiebreaker
+    const sorted = [...transactions].sort((a, b) => {
+      const dateDiff = new Date(b.transaction_date) - new Date(a.transaction_date);
+      if (dateDiff !== 0) return dateDiff;
+      return Number(b.transaction_number) - Number(a.transaction_number);
+    });
+    return sorted[0]?.ending_balance ?? 0;
   }, [transactions]);
 
   // LDP Postcard postage override: qty * $0.244
