@@ -22,6 +22,7 @@ jobs:
           node-version: '20'
       - run: npm install
       - run: npx playwright install chromium --with-deps
+        timeout-minutes: 10
       - run: node run.js
         env:
           OSPREY_URL: ${{ secrets.OSPREY_URL }}
