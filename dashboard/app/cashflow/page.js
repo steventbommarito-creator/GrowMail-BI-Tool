@@ -449,7 +449,7 @@ export default function CashflowPage() {
           <table className="w-full text-sm">
             <thead style={{ background: 'var(--surface2)' }}>
               <tr>
-                {['', 'Week', 'Postage Due', 'Stripe Expected', 'Invoice Expected', 'Total Expected', 'Proj. Deposit', 'Drops', ''].map((h, i) => (
+                {['', 'Week', 'Proj. Deposit', 'Postage Due', 'Stripe Expected', 'Invoice Expected', 'Drops', ''].map((h, i) => (
                   <th key={i} className="text-left px-3 py-2 text-xs font-semibold whitespace-nowrap"
                     style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
                 ))}
@@ -506,13 +506,12 @@ export default function CashflowPage() {
                     <td className="px-3 py-2.5 font-medium whitespace-nowrap" style={{ color: r.isLateMail ? 'var(--status-warn)' : 'var(--text-primary)' }}>
                       {r.isLateMail ? r.week : weekRangeLabel(r.weekStart)}
                     </td>
-                    <td className="px-3 py-2.5" style={{ color: isGap ? 'var(--status-critical)' : 'var(--text-primary)' }}>{fmt$(r.postageDue)}</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--status-ok)' }}>{fmt$(r.expectedStripe)}</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)' }}>{fmt$(r.expectedInvoice)}</td>
-                    <td className="px-3 py-2.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(r.totalExpected)}</td>
                     <td className="px-3 py-2.5" style={{ color: r.projDeposit > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
                       {r.projDeposit > 0 ? fmt$(r.projDeposit) : '—'}
                     </td>
+                    <td className="px-3 py-2.5" style={{ color: isGap ? 'var(--status-critical)' : 'var(--text-primary)' }}>{fmt$(r.postageDue)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--status-ok)' }}>{fmt$(r.expectedStripe)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)' }}>{fmt$(r.expectedInvoice)}</td>
                     <td className="px-3 py-2.5" style={{ color: 'var(--text-muted)' }}>{r.dropCount}</td>
                     <td className="px-3 py-2.5">
                       <button onClick={e => { e.stopPropagation(); exportWeekExcel(); }}
@@ -526,7 +525,7 @@ export default function CashflowPage() {
                   // Expanded: day accordions
                   isExpanded && (
                     <tr key={`${r.weekStart}-expanded`}>
-                      <td colSpan={9} style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)', padding: 0 }}>
+                      <td colSpan={8} style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)', padding: 0 }}>
                         <div className="px-8 py-3 space-y-2">
                           {dayKeys.map(dayKey => {
                             const dayDrops = byDay[dayKey];
