@@ -208,7 +208,30 @@ export default function ForecastPage() {
     return sorted[0]?.ending_balance ?? 0;
   }, [transactions]);
 
-  // ── Weekly breakdown — with BOTH bucket sets pre-computed ──────────────────
+  // ── Product category totals & color palette ───────────────────────────────
+  const PALETTE = ['#3b82f6','#10b981','#f59e0b','#8b5cf6','#ef4444','#06b6d4','#f97316','#84cc16','#ec4899','#14b8a6','#a855f7','#6366f1'];
+
+  const productTotals = useMemo(() => {
+    const out = {};
+    for (const d of drops) {
+      const cat = d.product_category || 'Unknown';
+      out[cat] = (out[cat] || 0) + effectivePostage(d);
+    }
+    return out;
+  }, [drops]);
+
+  // Sorted by total postage desc, assigned stable colors
+  const productCategories = useMemo(() =>
+    Object.entries(productTotals)
+      .sort((a, b) => b[1] - a[1])
+      .map(([cat], i) => ({ cat, color: PALETTE[i % PALETTE.length] })),
+  [productTotals]);
+
+  const productColorMap = useMemo(() =>
+    Object.fromEntries(productCategories.map(({ cat, color }) => [cat, color])),
+  [productCategories]);
+
+  // ── Weekly breakdown — order, drop, AND product buckets ───────────────────
   const weeklyBreakdown = useMemo(() => {
     const weekMap = {};
     for (const d of drops) {
@@ -223,6 +246,9 @@ export default function ForecastPage() {
 
       const db = dropBucket(d.drop_status);
       if (db) weekMap[ws][`d_${db}`] = (weekMap[ws][`d_${db}`] || 0) + p;
+
+      const cat = d.product_category || 'Unknown';
+      weekMap[ws][`p_${cat}`] = (weekMap[ws][`p_${cat}`] || 0) + p;
     }
     return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week)).slice(0, 12);
   }, [drops]);
@@ -258,8 +284,12 @@ export default function ForecastPage() {
     return out;
   }, [drops]);
 
-  const activeBuckets = chartMode === 'order' ? ORDER_BUCKETS : DROP_BUCKETS;
-  const prefix        = chartMode === 'order' ? 'o_' : 'd_';
+  const activeBuckets = chartMode === 'order' ? ORDER_BUCKETS
+                      : chartMode === 'drop'  ? DROP_BUCKETS
+                      : Object.fromEntries(productCategories.map(({ cat, color }) => [cat, color]));
+  const prefix        = chartMode === 'order' ? 'o_'
+                      : chartMode === 'drop'  ? 'd_'
+                      : 'p_';
 
   if (loading) return <p style={{ color: 'var(--text-muted)' }} className="p-4">Loading...</p>;
 
@@ -315,12 +345,13 @@ export default function ForecastPage() {
           </h2>
           {/* Toggle */}
           <div className="flex rounded overflow-hidden" style={{ border: '1px solid var(--border)' }}>
-            {[['order', 'By Order Stage'], ['drop', 'By Drop Status']].map(([mode, label]) => (
+            {[['order', 'By Order Stage'], ['drop', 'By Drop Status'], ['product', 'By Product']].map(([mode, label]) => (
               <button key={mode} onClick={() => setChartMode(mode)}
                 className="text-xs px-3 py-1 font-medium"
                 style={{
                   background: chartMode === mode ? 'var(--accent)' : 'var(--surface2)',
                   color: chartMode === mode ? 'var(--accent-text)' : 'var(--text-secondary)',
+                  borderLeft: mode !== 'order' ? '1px solid var(--border)' : 'none',
                 }}>
                 {label}
               </button>
@@ -331,14 +362,19 @@ export default function ForecastPage() {
         {/* Bucket legend pills */}
         <div className="flex flex-wrap gap-2 mb-3">
           {Object.entries(activeBuckets).map(([bucket, color]) => {
-            const totals    = chartMode === 'order' ? orderBucketTotals : dropBucketTotals;
-            const statusMap = chartMode === 'order' ? ORDER_BUCKET_STATUSES : DROP_BUCKET_STATUSES;
-            return totals[bucket] ? (
+            const totals    = chartMode === 'order' ? orderBucketTotals
+                            : chartMode === 'drop'  ? dropBucketTotals
+                            : productTotals;
+            const statusMap = chartMode === 'order' ? ORDER_BUCKET_STATUSES
+                            : chartMode === 'drop'  ? DROP_BUCKET_STATUSES
+                            : null;
+            const val = totals[bucket];
+            return val ? (
               <div key={bucket} className="flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs border"
                 style={{ background: 'var(--surface2)', borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
                 <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} />
-                {bucket}: {fmt$(totals[bucket])}
-                <InfoTip statuses={statusMap[bucket] || []} color={color} />
+                {bucket}: {fmt$(val)}
+                {statusMap && <InfoTip statuses={statusMap[bucket] || []} color={color} />}
               </div>
             ) : null;
           })}
@@ -359,6 +395,49 @@ export default function ForecastPage() {
             ))}
           </BarChart>
         </ResponsiveContainer>
+      </div>
+
+      {/* Product Type Breakdown */}
+      <div className="rounded-xl p-4 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+        <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--text-secondary)' }}>
+          Postage by Product Type
+        </h2>
+        <div className="space-y-2">
+          {productCategories.map(({ cat, color }) => {
+            const val  = productTotals[cat] || 0;
+            const pct  = totalPostage > 0 ? (val / totalPostage) * 100 : 0;
+            const cnt  = drops.filter(d => (d.product_category || 'Unknown') === cat).length;
+            const pcs  = drops.filter(d => (d.product_category || 'Unknown') === cat)
+                              .reduce((s, d) => s + (d.mail_drop_quantity || 0), 0);
+            return (
+              <div key={cat}>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: color }} />
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{cat}</span>
+                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                      {cnt} drop{cnt !== 1 ? 's' : ''} · {pcs.toLocaleString()} pcs
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{pct.toFixed(1)}%</span>
+                    <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)', minWidth: 100, textAlign: 'right' }}>{fmt$(val)}</span>
+                  </div>
+                </div>
+                <div className="rounded-full h-1.5 w-full" style={{ background: 'var(--surface2)' }}>
+                  <div className="rounded-full h-1.5" style={{ width: `${pct}%`, background: color, transition: 'width 0.4s ease' }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {/* Product totals footer */}
+        <div className="mt-4 pt-3 flex items-center justify-between border-t" style={{ borderColor: 'var(--border)' }}>
+          <span className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>
+            {productCategories.length} product types · {drops.length} total drops
+          </span>
+          <span className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{fmt$(totalPostage)}</span>
+        </div>
       </div>
 
       {/* Weekly summary table — shows both breakdowns */}
