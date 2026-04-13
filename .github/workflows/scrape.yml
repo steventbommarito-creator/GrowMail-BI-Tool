@@ -6,7 +6,12 @@ on:
     - cron: '0 17 * * *'   # noon EST
     - cron: '0 19 * * *'   # 2pm EST
     - cron: '0 21 * * *'   # 4pm EST
-  workflow_dispatch:         # manual trigger
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Which scraper to run (osprey, usps, both)'
+        required: false
+        default: 'both'
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -27,3 +32,5 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TRIGGERED_BY: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'cron' }}
+          SCRAPE_SOURCE: ${{ inputs.source || 'both' }}
