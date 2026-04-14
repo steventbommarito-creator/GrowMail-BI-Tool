@@ -69,7 +69,7 @@ function LoginForm() {
     e.preventDefault();
     setError('');
     const code = otp.trim();
-    if (code.length !== 6) { setError('Enter the 6-digit code.'); return; }
+    if (code.length < 6) { setError('Enter the full code.'); return; }
     const email = `${username.trim().toLowerCase().replace(/[@\s]/g, '')}@growmail.com`;
     setLoading(true);
     const { data, error: err } = await supabase.auth.verifyOtp({
@@ -170,9 +170,9 @@ function LoginForm() {
                 type="text"
                 inputMode="numeric"
                 pattern="[0-9]*"
-                maxLength={6}
+                maxLength={8}
                 value={otp}
-                onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 8))}
                 placeholder="123456"
                 autoComplete="one-time-code"
                 className="w-full px-3 py-2.5 text-sm rounded-lg border outline-none text-center tracking-widest font-mono"
