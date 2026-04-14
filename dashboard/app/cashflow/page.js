@@ -62,6 +62,7 @@ export default function CashflowPage() {
   const [newDeposit, setNewDeposit] = useState({ date: '', amount: '', note: '' });
   const [userEmail, setUserEmail] = useState('');
   const [customerTerms, setCustomerTerms] = useState({}); // customer_id → term_label
+  const [expandedBillingRows, setExpandedBillingRows] = useState({});
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUserEmail(data?.user?.email || ''));
@@ -862,6 +863,7 @@ export default function CashflowPage() {
             <thead style={{ background: 'var(--surface2)' }}>
               <tr>
                 {[
+                  { label: '', sub: null },
                   { label: 'Date', sub: null },
                   { label: 'Drops', sub: null },
                   { label: 'PrePay', sub: 'charge card' },
@@ -881,13 +883,20 @@ export default function CashflowPage() {
             <tbody>
               {paymentTermsRows.map((r, i) => {
                 const isPastDue = r.dateKey === 'past-due';
-                return (
+                const isExpanded = expandedBillingRows[r.dateKey];
+                const rowBg = isPastDue ? 'var(--status-warn-bg)' : i % 2 === 0 ? 'var(--surface)' : 'var(--surface2)';
+                return [
                   <tr key={r.dateKey}
+                    onClick={() => setExpandedBillingRows(s => ({ ...s, [r.dateKey]: !s[r.dateKey] }))}
+                    className="cursor-pointer"
                     style={{
-                      background: isPastDue ? 'var(--status-warn-bg)' : i % 2 === 0 ? 'var(--surface)' : 'var(--surface2)',
-                      borderBottom: '1px solid var(--border)',
+                      background: rowBg,
+                      borderBottom: isExpanded ? 'none' : '1px solid var(--border)',
                       borderLeft: isPastDue ? '3px solid var(--status-warn)' : undefined,
                     }}>
+                    <td className="px-3 py-2.5 text-xs" style={{ color: 'var(--text-muted)', width: 24 }}>
+                      {isExpanded ? '▼' : '▶'}
+                    </td>
                     <td className="px-3 py-2.5 font-medium whitespace-nowrap"
                       style={{ color: isPastDue ? 'var(--status-warn)' : 'var(--text-primary)' }}>
                       {isPastDue ? `⚠ Past Due (${r.drops.length} drops)` : dayLabel(r.dateKey)}
@@ -912,8 +921,64 @@ export default function CashflowPage() {
                     <td className="px-3 py-2.5 font-bold" style={{ color: r.total > 0 ? 'var(--status-ok)' : 'var(--text-muted)' }}>
                       {r.total > 0 ? fmt$(r.total) : '—'}
                     </td>
-                  </tr>
-                );
+                  </tr>,
+
+                  isExpanded && (
+                    <tr key={`${r.dateKey}-expanded`}>
+                      <td colSpan={8} style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)', padding: 0 }}>
+                        <div className="px-8 py-2">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr style={{ background: 'var(--surface)' }}>
+                                {['Customer', 'Web ID', 'Drop ID', 'Product', 'Terms', 'Sched. Date', 'Drop Status', 'Amount'].map(h => (
+                                  <th key={h} className="text-left px-3 py-1.5 font-semibold"
+                                    style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {r.drops.map((d, di) => {
+                                const billingAmt = d._term === 'PrePay'
+                                  ? Math.max(0, (d.order_amount || 0) - (d.payment_amount_applied || 0))
+                                  : (d.mail_drop_amount || 0);
+                                return (
+                                  <tr key={d.mail_drop_id || di} style={{
+                                    background: di % 2 === 0 ? 'transparent' : 'var(--surface)',
+                                    borderTop: '1px solid var(--border)',
+                                  }}>
+                                    <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
+                                    <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.web_id || '—'}</td>
+                                    <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_id || '—'}</td>
+                                    <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
+                                    <td className="px-3 py-1.5">
+                                      <span className="px-1.5 py-0.5 rounded font-semibold"
+                                        style={{
+                                          fontSize: '0.65rem',
+                                          background: d._term === 'PrePay' ? 'var(--accent-light)' : 'var(--surface2)',
+                                          color: d._term === 'PrePay' ? 'var(--accent)' : 'var(--text-secondary)',
+                                          border: '1px solid var(--border)',
+                                        }}>
+                                        {d._term}
+                                      </span>
+                                    </td>
+                                    <td className="px-3 py-1.5" style={{ color: d._pastDue ? 'var(--status-warn)' : 'var(--text-secondary)' }}>
+                                      {d.drop_est_date ? ET(d.drop_est_date) : '—'}
+                                      {d._pastDue && <span className="ml-1" style={{ color: 'var(--status-warn)' }}>⚠</span>}
+                                    </td>
+                                    <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.drop_status || '—'}</td>
+                                    <td className="px-3 py-1.5 font-bold" style={{ color: billingAmt > 0 ? 'var(--status-ok)' : 'var(--text-muted)' }}>
+                                      {billingAmt > 0 ? fmt$(billingAmt) : '—'}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  ),
+                ];
               })}
               {/* Totals row */}
               {paymentTermsRows.length > 0 && (() => {
@@ -927,6 +992,7 @@ export default function CashflowPage() {
                 }), { drops: 0, prepayCharge: 0, net30Invoice: 0, net45Invoice: 0, otherInvoice: 0, total: 0 });
                 return (
                   <tr style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border)' }}>
+                    <td className="px-3 py-2.5" />
                     <td className="px-3 py-2.5 text-xs font-bold" style={{ color: 'var(--text-secondary)' }}>TOTALS</td>
                     <td className="px-3 py-2.5 font-semibold" style={{ color: 'var(--text-secondary)' }}>{totals.drops}</td>
                     <td className="px-3 py-2.5 font-bold" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.prepayCharge)}</td>
