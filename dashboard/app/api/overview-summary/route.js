@@ -58,16 +58,20 @@ export async function GET() {
     const dayMap = {};
     const ensure = (date) => { if (!dayMap[date]) dayMap[date] = { postage: 0, deposits: 0, dropCount: 0 }; };
 
-    // Past-due all roll into today
-    for (const d of pastDue) {
+    // Past-due get their own synthetic 'past-due' bucket (rendered before today)
+    const pastDuePostageTotal = pastDue.reduce((s, d) => s + effectivePostage(d), 0);
+
+    // Today's drops only (est date === today, not past-due)
+    for (const d of (drops || [])) {
+      if (!d.is_live_status || d.drop_act_date || d.drop_est_date !== today) continue;
       ensure(today);
       dayMap[today].postage += effectivePostage(d);
       dayMap[today].dropCount += 1;
     }
 
-    // Future drops
+    // Future drops (after today)
     for (const d of (drops || [])) {
-      if (!d.is_live_status || d.drop_act_date || d.drop_est_date < today) continue;
+      if (!d.is_live_status || d.drop_act_date || d.drop_est_date <= today) continue;
       const date = d.drop_est_date;
       if (!date) continue;
       ensure(date);
@@ -87,7 +91,24 @@ export async function GET() {
     const dayData = [];
     let balance = currentBalance;
 
-    // Always include today as start point even if no events
+    // Prepend past-due row if any exist (balance impact shown before today)
+    if (pastDueCount > 0) {
+      const startBalance = balance;
+      balance = +(balance - pastDuePostageTotal).toFixed(2);
+      dayData.push({
+        date: 'past-due',
+        label: '⚠ Late Mail (Past-Due)',
+        startBalance: +startBalance.toFixed(2),
+        postage: +pastDuePostageTotal.toFixed(2),
+        deposits: 0,
+        dropCount: pastDueCount,
+        endBalance: balance,
+        isGap: balance < 0,
+        isPastDue: true,
+      });
+    }
+
+    // Always include today even if no drops scheduled on that exact date
     if (!sortedDates.includes(today)) sortedDates.unshift(today);
 
     for (const date of sortedDates) {
@@ -102,6 +123,7 @@ export async function GET() {
         dropCount: day.dropCount,
         endBalance: balance,
         isGap: balance < 0,
+        isPastDue: false,
       });
     }
 

@@ -165,7 +165,7 @@ export default function OverviewPage() {
           <p className="text-sm text-center py-12" style={{ color: 'var(--text-muted)' }}>No upcoming drop data.</p>
         ) : (
           <ResponsiveContainer width="100%" height={300}>
-            <ComposedChart data={dayData} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
+            <ComposedChart data={dayData.filter(d => !d.isPastDue)} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
               <XAxis
                 dataKey="date"
@@ -229,24 +229,43 @@ export default function OverviewPage() {
                 </tr>
               </thead>
               <tbody>
-                {dayData.map((row, i) => (
-                  <tr key={row.date} style={{
-                    background: row.isGap ? 'var(--status-critical-bg)' : i % 2 === 0 ? 'var(--surface)' : 'var(--surface2)',
-                    borderBottom: '1px solid var(--border)',
-                  }}>
-                    <td className="px-4 py-2.5 font-medium" style={{ color: 'var(--text-primary)' }}>{dayLabel(row.date)}</td>
-                    <td className="px-4 py-2.5" style={{ color: row.startBalance < 0 ? 'var(--status-critical)' : 'var(--text-secondary)' }}>{fmt$(row.startBalance)}</td>
-                    <td className="px-4 py-2.5" style={{ color: row.deposits > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
-                      {row.deposits > 0 ? `+${fmt$(row.deposits)}` : '—'}
-                    </td>
-                    <td className="px-4 py-2.5" style={{ color: row.postage > 0 ? 'var(--status-warn)' : 'var(--text-muted)' }}>
-                      {row.postage > 0 ? `−${fmt$(row.postage)}` : '—'}
-                    </td>
-                    <td className="px-4 py-2.5" style={{ color: 'var(--text-muted)' }}>{row.dropCount || '—'}</td>
-                    <td className="px-4 py-2.5 font-semibold" style={{ color: row.isGap ? 'var(--status-critical)' : 'var(--status-ok)' }}>
-                      {fmt$(row.endBalance)}
-                    </td>
-                  </tr>
+                {dayData.map((row, i) => {
+                  const isPastDue = row.isPastDue;
+                  // Index for zebra striping ignores the past-due row
+                  const stripeIdx = isPastDue ? 0 : dayData.filter((r, ri) => !r.isPastDue && ri <= i).length - 1;
+                  return (
+                  <>
+                    <tr key={row.date} style={{
+                      background: isPastDue ? 'var(--status-warn-bg)' : row.isGap ? 'var(--status-critical-bg)' : stripeIdx % 2 === 0 ? 'var(--surface)' : 'var(--surface2)',
+                      borderBottom: '1px solid var(--border)',
+                      borderLeft: isPastDue ? '3px solid var(--status-warn)' : 'none',
+                    }}>
+                      <td className="px-4 py-2.5 font-semibold" style={{ color: isPastDue ? 'var(--status-warn)' : 'var(--text-primary)' }}>
+                        {isPastDue ? row.label : dayLabel(row.date)}
+                      </td>
+                      <td className="px-4 py-2.5" style={{ color: row.startBalance < 0 ? 'var(--status-critical)' : 'var(--text-secondary)' }}>{fmt$(row.startBalance)}</td>
+                      <td className="px-4 py-2.5" style={{ color: row.deposits > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+                        {row.deposits > 0 ? `+${fmt$(row.deposits)}` : '—'}
+                      </td>
+                      <td className="px-4 py-2.5 font-medium" style={{ color: isPastDue ? 'var(--status-warn)' : row.postage > 0 ? 'var(--status-warn)' : 'var(--text-muted)' }}>
+                        {row.postage > 0 ? `−${fmt$(row.postage)}` : '—'}
+                      </td>
+                      <td className="px-4 py-2.5" style={{ color: 'var(--text-muted)' }}>{row.dropCount || '—'}</td>
+                      <td className="px-4 py-2.5 font-semibold" style={{ color: row.isGap ? 'var(--status-critical)' : isPastDue ? 'var(--status-warn)' : 'var(--status-ok)' }}>
+                        {fmt$(row.endBalance)}
+                      </td>
+                    </tr>
+                    {/* Divider after past-due row before today */}
+                    {isPastDue && (
+                      <tr key="divider" style={{ background: 'var(--border)' }}>
+                        <td colSpan={6} className="px-4 py-0.5 text-xs font-semibold" style={{ color: 'var(--text-muted)', borderBottom: '2px solid var(--border)' }}>
+                          ↓ Today & Forward
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                  );
+                })}
                 ))}
               </tbody>
             </table>
