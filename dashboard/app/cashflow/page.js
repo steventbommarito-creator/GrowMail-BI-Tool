@@ -198,44 +198,11 @@ export default function CashflowPage() {
 
   // Accounting weekly table: postage due, expected stripe, expected invoice
   const accountingRows = useMemo(() => {
-    const rows = [];
-
-    // Late Mail row — past-due drops pinned to top
-    if (pastDueDrops.length > 0) {
-      const latePostage = pastDueDrops.reduce((s, d) => s + effectivePostage(d), 0);
-      const lateInvoice = pastDueDrops.filter(d => !d.payment_amount_applied || d.payment_amount_applied === 0)
-        .reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
-      const lateStripe = pastDueDrops.filter(d => (d.payment_amount_applied || 0) > 0).reduce((s, d) => {
-        const paid = d.payment_amount_applied || 0;
-        const total = d.order_amount || 0;
-        const pct = total ? paid / total : 0;
-        return s + (pct > 0.4 && pct < 0.7 ? (total - paid) : 0);
-      }, 0);
-      rows.push({
-        week: '⚠ Late Mail',
-        weekStart: 'late-mail',
-        postageDue: latePostage,
-        pastDue: latePostage,
-        expectedStripe: lateStripe,
-        expectedInvoice: lateInvoice,
-        totalExpected: lateStripe + lateInvoice,
-        projDeposit: 0,
-        dropCount: pastDueDrops.length,
-        drops: pastDueDrops.map(d => ({ ...d, _pastDue: true, _effectivePostage: effectivePostage(d) })),
-        isLateMail: true,
-      });
-    }
-
-    // Add running EPS balance to each row
     let running = currentBalance;
-    for (const r of rows) {
-      running += r.projDeposit - r.postageDue;
-      r.runningBalance = running;
-    }
 
-    return [...rows, ...weeklyNeeds.map(w => {
+    return weeklyNeeds.map(w => {
       const prepay = w.drops.filter(d => (d.payment_amount_applied || 0) > 0);
-      const terms = w.drops.filter(d => !d.payment_amount_applied || d.payment_amount_applied === 0);
+      const terms  = w.drops.filter(d => !d.payment_amount_applied || d.payment_amount_applied === 0);
 
       // Stripe Expected: prepay customers where ~50% deposit was collected at order —
       // remaining balance (order_amount - paid) expected at delivery
@@ -257,6 +224,7 @@ export default function CashflowPage() {
         weekStart: w.week,
         postageDue: w.postage,
         pastDue: w.pastDue,
+        pastDueCount: w.drops.filter(d => d._pastDue).length,
         expectedStripe,
         expectedInvoice,
         totalExpected: expectedStripe + expectedInvoice,
@@ -265,8 +233,8 @@ export default function CashflowPage() {
         drops: w.drops,
         runningBalance: running,
       };
-    })];
-  }, [weeklyNeeds, pastDueDrops, projectedDeposits, currentBalance]);
+    });
+  }, [weeklyNeeds, projectedDeposits, currentBalance]);
 
   // Flat day rows for day view — all drops grouped by date, chronological
   const dayRows = useMemo(() => {
@@ -634,16 +602,20 @@ export default function CashflowPage() {
                     onClick={() => setExpandedWeeks(s => ({ ...s, [r.weekStart]: !s[r.weekStart] }))}
                     className="cursor-pointer"
                     style={{
-                      background: isGap ? 'var(--status-critical-bg)' :
-                                  r.pastDue > 0 ? 'var(--status-warn-bg)' :
-                                  i % 2 === 0 ? 'var(--surface)' : 'var(--surface2)',
+                      background: isGap ? 'var(--status-critical-bg)' : i % 2 === 0 ? 'var(--surface)' : 'var(--surface2)',
                       borderBottom: isExpanded ? 'none' : '1px solid var(--border)',
                     }}>
                     <td className="px-3 py-2.5 text-xs" style={{ color: 'var(--text-muted)', width: 24 }}>
                       {isExpanded ? '▼' : '▶'}
                     </td>
-                    <td className="px-3 py-2.5 font-medium whitespace-nowrap" style={{ color: r.isLateMail ? 'var(--status-warn)' : 'var(--text-primary)' }}>
-                      {r.isLateMail ? r.week : weekRangeLabel(r.weekStart)}
+                    <td className="px-3 py-2.5 font-medium whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>
+                      <span>{weekRangeLabel(r.weekStart)}</span>
+                      {r.pastDueCount > 0 && (
+                        <span className="ml-2 text-xs font-semibold px-1.5 py-0.5 rounded"
+                          style={{ background: 'var(--status-warn-bg)', color: 'var(--status-warn)', border: '1px solid var(--status-warn)', verticalAlign: 'middle' }}>
+                          ⚠ {r.pastDueCount} late
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2.5" style={{ color: r.projDeposit > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
                       {r.projDeposit > 0 ? fmt$(r.projDeposit) : '—'}
@@ -734,7 +706,7 @@ export default function CashflowPage() {
                                   <table className="w-full text-xs">
                                     <thead style={{ background: 'var(--surface2)' }}>
                                       <tr>
-                                        {['Customer', 'Product', 'Drop ID', 'Status', r.isLateMail ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag'].filter(Boolean).map(h => (
+                                        {['Customer', 'Product', 'Drop ID', 'Status', dayKey === 'past-due' ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag'].filter(Boolean).map(h => (
                                           <th key={h} className="text-left px-3 py-1.5 font-medium"
                                             style={{ color: 'var(--text-muted)' }}>{h}</th>
                                         ))}
@@ -750,9 +722,9 @@ export default function CashflowPage() {
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_id || '—'}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.drop_status || '—'}</td>
-                                          {r.isLateMail && (
+                                          {dayKey === 'past-due' && (
                                             <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--status-warn)' }}>
-                                              {d.drop_est_date || '—'}
+                                              {ET(d.drop_est_date) || '—'}
                                             </td>
                                           )}
                                           <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(d._effectivePostage ?? d.postage_amount)}</td>
