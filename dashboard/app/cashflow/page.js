@@ -310,36 +310,35 @@ export default function CashflowPage() {
 
     return sortedKeys.map(dateKey => {
       const dayDrops = dayMap[dateKey];
-      const totalPostage = dayDrops.reduce((s, d) => s + d._postage, 0);
-      const totalAmtDue = dayDrops.reduce((s, d) => s + d._amtDue, 0);
 
-      const prepay    = dayDrops.filter(d => d._term === 'PrePay');
-      const net30     = dayDrops.filter(d => d._term === 'NET30');
-      const net45     = dayDrops.filter(d => d._term === 'NET45');
-      const other     = dayDrops.filter(d => !['PrePay', 'NET30', 'NET45'].includes(d._term));
+      const prepay = dayDrops.filter(d => d._term === 'PrePay');
+      const net30  = dayDrops.filter(d => d._term === 'NET30');
+      const net45  = dayDrops.filter(d => d._term === 'NET45');
+      const other  = dayDrops.filter(d => !['PrePay', 'NET30', 'NET45'].includes(d._term));
 
-      const prepayPostage    = prepay.reduce((s, d) => s + d._postage, 0);
-      const prepayAmtDue     = prepay.reduce((s, d) => s + d._amtDue, 0);
-      const net30Postage     = net30.reduce((s, d) => s + d._postage, 0);
-      const net30AmtDue      = net30.reduce((s, d) => s + d._amtDue, 0);
-      const net45Postage     = net45.reduce((s, d) => s + d._postage, 0);
-      const net45AmtDue      = net45.reduce((s, d) => s + d._amtDue, 0);
-      const otherPostage     = other.reduce((s, d) => s + d._postage, 0);
-      const otherAmtDue      = other.reduce((s, d) => s + d._amtDue, 0);
+      // PrePay: charge the remaining card balance (order total minus deposit already collected)
+      const prepayCharge = prepay.reduce((s, d) =>
+        s + Math.max(0, (d.order_amount || 0) - (d.payment_amount_applied || 0)), 0);
+
+      // Terms customers: invoice the mail drop amount for this specific drop
+      const net30Invoice  = net30.reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
+      const net45Invoice  = net45.reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
+      const otherInvoice  = other.reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
+
+      const total = prepayCharge + net30Invoice + net45Invoice + otherInvoice;
 
       return {
         dateKey,
         drops: dayDrops,
-        totalPostage,
-        totalAmtDue,
-        prepayPostage,
-        prepayAmtDue,
-        net30Postage,
-        net30AmtDue,
-        net45Postage,
-        net45AmtDue,
-        otherPostage,
-        otherAmtDue,
+        prepayCount: prepay.length,
+        net30Count: net30.length,
+        net45Count: net45.length,
+        otherCount: other.length,
+        prepayCharge,
+        net30Invoice,
+        net45Invoice,
+        otherInvoice,
+        total,
       };
     });
   }, [drops, pastDueDrops, customerTerms, today]);
@@ -830,28 +829,28 @@ export default function CashflowPage() {
         </div>
       </div>
 
-      {/* Payment Terms by Day */}
+      {/* Billing Forecast by Day */}
       <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border)' }}>
         <div className="px-4 py-3 flex items-center justify-between"
           style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
-          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
-            Payment Terms by Day
-          </h2>
+          <div>
+            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
+              Billing Forecast by Day
+            </h2>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              PrePay = order balance to charge · NET30/45/Other = drop amount to invoice
+            </p>
+          </div>
           <button
             onClick={() => exportToCSV(paymentTermsRows.map(r => ({
               'Date': r.dateKey === 'past-due' ? 'Past Due' : r.dateKey,
               'Drops': r.drops.length,
-              'Total Postage': r.totalPostage.toFixed(2),
-              'PrePay Postage': r.prepayPostage.toFixed(2),
-              'PrePay Amt Due': r.prepayAmtDue.toFixed(2),
-              'NET30 Postage': r.net30Postage.toFixed(2),
-              'NET30 Amt Due': r.net30AmtDue.toFixed(2),
-              'NET45 Postage': r.net45Postage.toFixed(2),
-              'NET45 Amt Due': r.net45AmtDue.toFixed(2),
-              'Other Postage': r.otherPostage.toFixed(2),
-              'Other Amt Due': r.otherAmtDue.toFixed(2),
-              'Total Amt Due': r.totalAmtDue.toFixed(2),
-            })), 'payment-terms-by-day')}
+              'PrePay (charge)': r.prepayCharge.toFixed(2),
+              'NET30 (invoice)': r.net30Invoice.toFixed(2),
+              'NET45 (invoice)': r.net45Invoice.toFixed(2),
+              'Other Terms (invoice)': r.otherInvoice.toFixed(2),
+              'Total': r.total.toFixed(2),
+            })), 'billing-forecast')}
             className="text-xs px-2 py-1 rounded"
             style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
             Export CSV
@@ -862,9 +861,20 @@ export default function CashflowPage() {
           <table className="w-full text-sm">
             <thead style={{ background: 'var(--surface2)' }}>
               <tr>
-                {['Date', 'Drops', 'Total Postage', 'PrePay', 'PrePay Amt Due', 'NET30', 'NET30 Amt Due', 'NET45', 'NET45 Amt Due', 'Other', 'Other Amt Due', 'Total Amt Due'].map(h => (
-                  <th key={h} className="text-left px-3 py-2 text-xs font-semibold whitespace-nowrap"
-                    style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
+                {[
+                  { label: 'Date', sub: null },
+                  { label: 'Drops', sub: null },
+                  { label: 'PrePay', sub: 'charge card' },
+                  { label: 'NET30', sub: 'invoice' },
+                  { label: 'NET45', sub: 'invoice' },
+                  { label: 'Other Terms', sub: 'invoice' },
+                  { label: 'Total', sub: null },
+                ].map(h => (
+                  <th key={h.label} className="text-left px-3 py-2 text-xs font-semibold whitespace-nowrap"
+                    style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>
+                    {h.label}
+                    {h.sub && <span className="block text-xs font-normal" style={{ color: 'var(--text-muted)', opacity: 0.7 }}>{h.sub}</span>}
+                  </th>
                 ))}
               </tr>
             </thead>
@@ -883,33 +893,24 @@ export default function CashflowPage() {
                       {isPastDue ? `⚠ Past Due (${r.drops.length} drops)` : dayLabel(r.dateKey)}
                     </td>
                     <td className="px-3 py-2.5" style={{ color: 'var(--text-muted)' }}>{r.drops.length}</td>
-                    <td className="px-3 py-2.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(r.totalPostage)}</td>
-                    <td className="px-3 py-2.5" style={{ color: r.prepayPostage > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                      {r.prepayPostage > 0 ? fmt$(r.prepayPostage) : '—'}
+                    <td className="px-3 py-2.5 font-medium" style={{ color: r.prepayCharge > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                      {r.prepayCharge > 0 ? fmt$(r.prepayCharge) : '—'}
+                      {r.prepayCount > 0 && <span className="ml-1 text-xs font-normal" style={{ color: 'var(--text-muted)' }}>({r.prepayCount})</span>}
                     </td>
-                    <td className="px-3 py-2.5 font-medium" style={{ color: r.prepayAmtDue > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
-                      {r.prepayAmtDue > 0 ? fmt$(r.prepayAmtDue) : '—'}
+                    <td className="px-3 py-2.5 font-medium" style={{ color: r.net30Invoice > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                      {r.net30Invoice > 0 ? fmt$(r.net30Invoice) : '—'}
+                      {r.net30Count > 0 && <span className="ml-1 text-xs font-normal" style={{ color: 'var(--text-muted)' }}>({r.net30Count})</span>}
                     </td>
-                    <td className="px-3 py-2.5" style={{ color: r.net30Postage > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                      {r.net30Postage > 0 ? fmt$(r.net30Postage) : '—'}
+                    <td className="px-3 py-2.5 font-medium" style={{ color: r.net45Invoice > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                      {r.net45Invoice > 0 ? fmt$(r.net45Invoice) : '—'}
+                      {r.net45Count > 0 && <span className="ml-1 text-xs font-normal" style={{ color: 'var(--text-muted)' }}>({r.net45Count})</span>}
                     </td>
-                    <td className="px-3 py-2.5 font-medium" style={{ color: r.net30AmtDue > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
-                      {r.net30AmtDue > 0 ? fmt$(r.net30AmtDue) : '—'}
+                    <td className="px-3 py-2.5 font-medium" style={{ color: r.otherInvoice > 0 ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+                      {r.otherInvoice > 0 ? fmt$(r.otherInvoice) : '—'}
+                      {r.otherCount > 0 && <span className="ml-1 text-xs font-normal" style={{ color: 'var(--text-muted)' }}>({r.otherCount})</span>}
                     </td>
-                    <td className="px-3 py-2.5" style={{ color: r.net45Postage > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                      {r.net45Postage > 0 ? fmt$(r.net45Postage) : '—'}
-                    </td>
-                    <td className="px-3 py-2.5 font-medium" style={{ color: r.net45AmtDue > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
-                      {r.net45AmtDue > 0 ? fmt$(r.net45AmtDue) : '—'}
-                    </td>
-                    <td className="px-3 py-2.5" style={{ color: r.otherPostage > 0 ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
-                      {r.otherPostage > 0 ? fmt$(r.otherPostage) : '—'}
-                    </td>
-                    <td className="px-3 py-2.5 font-medium" style={{ color: r.otherAmtDue > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
-                      {r.otherAmtDue > 0 ? fmt$(r.otherAmtDue) : '—'}
-                    </td>
-                    <td className="px-3 py-2.5 font-medium" style={{ color: r.totalAmtDue > 0 ? 'var(--status-ok)' : 'var(--text-muted)' }}>
-                      {r.totalAmtDue > 0 ? fmt$(r.totalAmtDue) : '—'}
+                    <td className="px-3 py-2.5 font-bold" style={{ color: r.total > 0 ? 'var(--status-ok)' : 'var(--text-muted)' }}>
+                      {r.total > 0 ? fmt$(r.total) : '—'}
                     </td>
                   </tr>
                 );
@@ -918,31 +919,21 @@ export default function CashflowPage() {
               {paymentTermsRows.length > 0 && (() => {
                 const totals = paymentTermsRows.reduce((acc, r) => ({
                   drops: acc.drops + r.drops.length,
-                  totalPostage: acc.totalPostage + r.totalPostage,
-                  prepayPostage: acc.prepayPostage + r.prepayPostage,
-                  prepayAmtDue: acc.prepayAmtDue + r.prepayAmtDue,
-                  net30Postage: acc.net30Postage + r.net30Postage,
-                  net30AmtDue: acc.net30AmtDue + r.net30AmtDue,
-                  net45Postage: acc.net45Postage + r.net45Postage,
-                  net45AmtDue: acc.net45AmtDue + r.net45AmtDue,
-                  otherPostage: acc.otherPostage + r.otherPostage,
-                  otherAmtDue: acc.otherAmtDue + r.otherAmtDue,
-                  totalAmtDue: acc.totalAmtDue + r.totalAmtDue,
-                }), { drops: 0, totalPostage: 0, prepayPostage: 0, prepayAmtDue: 0, net30Postage: 0, net30AmtDue: 0, net45Postage: 0, net45AmtDue: 0, otherPostage: 0, otherAmtDue: 0, totalAmtDue: 0 });
+                  prepayCharge: acc.prepayCharge + r.prepayCharge,
+                  net30Invoice: acc.net30Invoice + r.net30Invoice,
+                  net45Invoice: acc.net45Invoice + r.net45Invoice,
+                  otherInvoice: acc.otherInvoice + r.otherInvoice,
+                  total: acc.total + r.total,
+                }), { drops: 0, prepayCharge: 0, net30Invoice: 0, net45Invoice: 0, otherInvoice: 0, total: 0 });
                 return (
-                  <tr style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border)', fontWeight: 600 }}>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 700 }}>TOTALS</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)' }}>{totals.drops}</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.totalPostage)}</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.prepayPostage)}</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--accent)' }}>{fmt$(totals.prepayAmtDue)}</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.net30Postage)}</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--accent)' }}>{fmt$(totals.net30AmtDue)}</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.net45Postage)}</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--accent)' }}>{fmt$(totals.net45AmtDue)}</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)' }}>{fmt$(totals.otherPostage)}</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--accent)' }}>{fmt$(totals.otherAmtDue)}</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--status-ok)' }}>{fmt$(totals.totalAmtDue)}</td>
+                  <tr style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border)' }}>
+                    <td className="px-3 py-2.5 text-xs font-bold" style={{ color: 'var(--text-secondary)' }}>TOTALS</td>
+                    <td className="px-3 py-2.5 font-semibold" style={{ color: 'var(--text-secondary)' }}>{totals.drops}</td>
+                    <td className="px-3 py-2.5 font-bold" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.prepayCharge)}</td>
+                    <td className="px-3 py-2.5 font-bold" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.net30Invoice)}</td>
+                    <td className="px-3 py-2.5 font-bold" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.net45Invoice)}</td>
+                    <td className="px-3 py-2.5 font-bold" style={{ color: 'var(--text-secondary)' }}>{fmt$(totals.otherInvoice)}</td>
+                    <td className="px-3 py-2.5 font-bold" style={{ color: 'var(--status-ok)' }}>{fmt$(totals.total)}</td>
                   </tr>
                 );
               })()}
