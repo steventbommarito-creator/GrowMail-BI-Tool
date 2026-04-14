@@ -58,8 +58,14 @@ export async function GET() {
     const dayMap = {};
     const ensure = (date) => { if (!dayMap[date]) dayMap[date] = { postage: 0, deposits: 0, dropCount: 0 }; };
 
-    // Past-due get their own synthetic 'past-due' bucket (rendered before today)
-    const pastDuePostageTotal = pastDue.reduce((s, d) => s + effectivePostage(d), 0);
+    // Past-due: group by their original scheduled date
+    const pastDueByDate = {};
+    for (const d of pastDue) {
+      const date = d.drop_est_date || 'unknown';
+      if (!pastDueByDate[date]) pastDueByDate[date] = { postage: 0, dropCount: 0 };
+      pastDueByDate[date].postage += effectivePostage(d);
+      pastDueByDate[date].dropCount += 1;
+    }
 
     // Today's drops only (est date === today, not past-due)
     for (const d of (drops || [])) {
@@ -86,29 +92,31 @@ export async function GET() {
       dayMap[date].deposits += p.amount;
     }
 
-    // Build day-by-day array — today through today + 14 days only
-    const sortedDates = Object.keys(dayMap).filter(d => d >= today && d <= in14d).sort();
     const dayData = [];
     let balance = currentBalance;
 
-    // Prepend past-due row if any exist (balance impact shown before today)
-    if (pastDueCount > 0) {
+    // Past-due rows — one per original scheduled date, sorted chronologically
+    const pastDueDates = Object.keys(pastDueByDate).sort();
+    for (const date of pastDueDates) {
+      const { postage, dropCount } = pastDueByDate[date];
       const startBalance = balance;
-      balance = +(balance - pastDuePostageTotal).toFixed(2);
+      balance = +(balance - postage).toFixed(2);
       dayData.push({
-        date: 'past-due',
-        label: '⚠ Late Mail (Past-Due)',
+        date,
         startBalance: +startBalance.toFixed(2),
-        postage: +pastDuePostageTotal.toFixed(2),
+        postage: +postage.toFixed(2),
         deposits: 0,
-        dropCount: pastDueCount,
+        dropCount,
         endBalance: balance,
         isGap: balance < 0,
         isPastDue: true,
+        isFirstPastDue: date === pastDueDates[0],
+        isLastPastDue: date === pastDueDates[pastDueDates.length - 1],
       });
     }
 
-    // Always include today even if no drops scheduled on that exact date
+    // Today + forward rows
+    const sortedDates = Object.keys(dayMap).filter(d => d >= today && d <= in14d).sort();
     if (!sortedDates.includes(today)) sortedDates.unshift(today);
 
     for (const date of sortedDates) {
