@@ -61,6 +61,7 @@ export default function CashflowPage() {
   const [showAddDeposit, setShowAddDeposit] = useState(false);
   const [newDeposit, setNewDeposit] = useState({ date: '', amount: '', note: '' });
   const [userEmail, setUserEmail] = useState('');
+  const [customerTerms, setCustomerTerms] = useState({}); // customer_id → term_label
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUserEmail(data?.user?.email || ''));
@@ -73,10 +74,11 @@ export default function CashflowPage() {
     const in8w = addDays(new Date().toISOString().split('T')[0], 56);
     const today = new Date().toISOString().split('T')[0];
 
-    const [{ data: txns }, { data: dropData }, { data: projData }] = await Promise.all([
+    const [{ data: txns }, { data: dropData }, { data: projData }, { data: termsData }] = await Promise.all([
       supabase.from('usps_transactions').select('*').gte('transaction_date', since90).order('transaction_date', { ascending: true }),
-      supabase.from('osprey_mail_drops').select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, mail_drop_amount, production_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id').in('order_status', ['DAL [SUBMITTED]', 'DIGITAL READY', 'DIGITAL [STAGING]', 'OUTSOURCED', 'OUTSOURCED [STAGING]']).eq('is_live_status', true).lte('drop_est_date', in8w),
+      supabase.from('osprey_mail_drops').select('mail_drop_id, order_id, customer_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, mail_drop_amount, production_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id').in('order_status', ['DAL [SUBMITTED]', 'DIGITAL READY', 'DIGITAL [STAGING]', 'OUTSOURCED', 'OUTSOURCED [STAGING]']).eq('is_live_status', true).lte('drop_est_date', in8w),
       supabase.from('projected_deposits').select('*').eq('is_active', true).order('deposit_date'),
+      supabase.from('customer_terms').select('customer_id, term_label'),
     ]);
 
     // Deduplicate drops by mail_drop_id — keep last record (most recent sync state)
@@ -85,9 +87,14 @@ export default function CashflowPage() {
       seenDrops.set(d.mail_drop_id, d);
     }
 
+    // Build customer_id → term_label map
+    const termsMap = {};
+    for (const t of (termsData || [])) termsMap[t.customer_id] = t.term_label;
+
     setTransactions(txns || []);
     setDrops([...seenDrops.values()]);
     setProjectedDeposits(projData || []);
+    setCustomerTerms(termsMap);
     setLoading(false);
   }, []);
 
@@ -270,6 +277,60 @@ export default function CashflowPage() {
       return { date, drops: dayDrops, postage, deposit, isLateMail, runningBalance: bal?.runningBalance, isGap: bal?.isGap };
     });
   }, [weeklyNeeds, pastDueDrops, projectedDeposits, dayBalances, today]);
+
+  // Payment terms by day — all live drops grouped by date, split by term_label
+  const paymentTermsRows = useMemo(() => {
+    const dayMap = {};
+
+    const allDrops = [
+      ...pastDueDrops.map(d => ({ ...d, _pastDue: true })),
+      ...drops.filter(d => d.is_live_status && !d.drop_act_date && d.drop_est_date >= today),
+    ];
+
+    for (const d of allDrops) {
+      const dateKey = d._pastDue ? 'past-due' : (d.drop_est_date || 'unknown');
+      if (!dayMap[dateKey]) dayMap[dateKey] = [];
+      const term = customerTerms[d.customer_id] || 'Other';
+      const postage = effectivePostage(d);
+      const amtDue = Math.max(0, (d.order_amount || 0) - (d.payment_amount_applied || 0));
+      dayMap[dateKey].push({ ...d, _term: term, _postage: postage, _amtDue: amtDue });
+    }
+
+    const sortedKeys = Object.keys(dayMap).sort((a, b) => {
+      if (a === 'past-due') return -1;
+      if (b === 'past-due') return 1;
+      return a.localeCompare(b);
+    });
+
+    return sortedKeys.map(dateKey => {
+      const dayDrops = dayMap[dateKey];
+      const totalPostage = dayDrops.reduce((s, d) => s + d._postage, 0);
+      const totalAmtDue = dayDrops.reduce((s, d) => s + d._amtDue, 0);
+
+      const prepay    = dayDrops.filter(d => d._term === 'PrePay');
+      const net30     = dayDrops.filter(d => d._term === 'NET30');
+      const net45     = dayDrops.filter(d => d._term === 'NET45');
+      const other     = dayDrops.filter(d => !['PrePay', 'NET30', 'NET45'].includes(d._term));
+
+      const prepayPostage    = prepay.reduce((s, d) => s + d._postage, 0);
+      const prepayAmtDue     = prepay.reduce((s, d) => s + d._amtDue, 0);
+      const net30Postage     = net30.reduce((s, d) => s + d._postage, 0);
+      const net45Postage     = net45.reduce((s, d) => s + d._postage, 0);
+      const otherPostage     = other.reduce((s, d) => s + d._postage, 0);
+
+      return {
+        dateKey,
+        drops: dayDrops,
+        totalPostage,
+        totalAmtDue,
+        prepayPostage,
+        prepayAmtDue,
+        net30Postage,
+        net45Postage,
+        otherPostage,
+      };
+    });
+  }, [drops, pastDueDrops, customerTerms, today]);
 
   async function addProjectedDeposit() {
     if (!newDeposit.date || !newDeposit.amount) return;
@@ -752,6 +813,109 @@ export default function CashflowPage() {
                   ),
                 ];
               })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Payment Terms by Day */}
+      <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border)' }}>
+        <div className="px-4 py-3 flex items-center justify-between"
+          style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
+          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
+            Payment Terms by Day
+          </h2>
+          <button
+            onClick={() => exportToCSV(paymentTermsRows.map(r => ({
+              'Date': r.dateKey === 'past-due' ? 'Past Due' : r.dateKey,
+              'Drops': r.drops.length,
+              'Total Postage': r.totalPostage.toFixed(2),
+              'PrePay Postage': r.prepayPostage.toFixed(2),
+              'PrePay Amt Due': r.prepayAmtDue.toFixed(2),
+              'NET30 Postage': r.net30Postage.toFixed(2),
+              'NET45 Postage': r.net45Postage.toFixed(2),
+              'Other Postage': r.otherPostage.toFixed(2),
+              'Total Amt Due': r.totalAmtDue.toFixed(2),
+            })), 'payment-terms-by-day')}
+            className="text-xs px-2 py-1 rounded"
+            style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+            Export CSV
+          </button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead style={{ background: 'var(--surface2)' }}>
+              <tr>
+                {['Date', 'Drops', 'Total Postage', 'PrePay', 'PrePay Amt Due', 'NET30', 'NET45', 'Other Terms', 'Total Amt Due'].map(h => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-semibold whitespace-nowrap"
+                    style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {paymentTermsRows.map((r, i) => {
+                const isPastDue = r.dateKey === 'past-due';
+                return (
+                  <tr key={r.dateKey}
+                    style={{
+                      background: isPastDue ? 'var(--status-warn-bg)' : i % 2 === 0 ? 'var(--surface)' : 'var(--surface2)',
+                      borderBottom: '1px solid var(--border)',
+                      borderLeft: isPastDue ? '3px solid var(--status-warn)' : undefined,
+                    }}>
+                    <td className="px-3 py-2.5 font-medium whitespace-nowrap"
+                      style={{ color: isPastDue ? 'var(--status-warn)' : 'var(--text-primary)' }}>
+                      {isPastDue ? `⚠ Past Due (${r.drops.length} drops)` : dayLabel(r.dateKey)}
+                    </td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-muted)' }}>{r.drops.length}</td>
+                    <td className="px-3 py-2.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(r.totalPostage)}</td>
+                    <td className="px-3 py-2.5" style={{ color: r.prepayPostage > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                      {r.prepayPostage > 0 ? fmt$(r.prepayPostage) : '—'}
+                    </td>
+                    <td className="px-3 py-2.5 font-medium" style={{ color: r.prepayAmtDue > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+                      {r.prepayAmtDue > 0 ? fmt$(r.prepayAmtDue) : '—'}
+                    </td>
+                    <td className="px-3 py-2.5" style={{ color: r.net30Postage > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                      {r.net30Postage > 0 ? fmt$(r.net30Postage) : '—'}
+                    </td>
+                    <td className="px-3 py-2.5" style={{ color: r.net45Postage > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                      {r.net45Postage > 0 ? fmt$(r.net45Postage) : '—'}
+                    </td>
+                    <td className="px-3 py-2.5" style={{ color: r.otherPostage > 0 ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+                      {r.otherPostage > 0 ? fmt$(r.otherPostage) : '—'}
+                    </td>
+                    <td className="px-3 py-2.5 font-medium" style={{ color: r.totalAmtDue > 0 ? 'var(--status-ok)' : 'var(--text-muted)' }}>
+                      {r.totalAmtDue > 0 ? fmt$(r.totalAmtDue) : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+              {/* Totals row */}
+              {paymentTermsRows.length > 0 && (() => {
+                const totals = paymentTermsRows.reduce((acc, r) => ({
+                  drops: acc.drops + r.drops.length,
+                  totalPostage: acc.totalPostage + r.totalPostage,
+                  prepayPostage: acc.prepayPostage + r.prepayPostage,
+                  prepayAmtDue: acc.prepayAmtDue + r.prepayAmtDue,
+                  net30Postage: acc.net30Postage + r.net30Postage,
+                  net45Postage: acc.net45Postage + r.net45Postage,
+                  otherPostage: acc.otherPostage + r.otherPostage,
+                  totalAmtDue: acc.totalAmtDue + r.totalAmtDue,
+                }), { drops: 0, totalPostage: 0, prepayPostage: 0, prepayAmtDue: 0, net30Postage: 0, net45Postage: 0, otherPostage: 0, totalAmtDue: 0 });
+                return (
+                  <tr style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border)', fontWeight: 600 }}>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 700 }}>TOTALS</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)' }}>{totals.drops}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.totalPostage)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.prepayPostage)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--accent)' }}>{fmt$(totals.prepayAmtDue)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.net30Postage)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.net45Postage)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)' }}>{fmt$(totals.otherPostage)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--status-ok)' }}>{fmt$(totals.totalAmtDue)}</td>
+                  </tr>
+                );
+              })()}
             </tbody>
           </table>
         </div>
