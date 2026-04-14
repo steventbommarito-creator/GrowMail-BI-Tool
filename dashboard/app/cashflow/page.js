@@ -79,8 +79,14 @@ export default function CashflowPage() {
       supabase.from('projected_deposits').select('*').eq('is_active', true).order('deposit_date'),
     ]);
 
+    // Deduplicate drops by mail_drop_id — keep last record (most recent sync state)
+    const seenDrops = new Map();
+    for (const d of (dropData || [])) {
+      seenDrops.set(d.mail_drop_id, d);
+    }
+
     setTransactions(txns || []);
-    setDrops(dropData || []);
+    setDrops([...seenDrops.values()]);
     setProjectedDeposits(projData || []);
     setLoading(false);
   }, []);

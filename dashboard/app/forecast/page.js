@@ -196,7 +196,11 @@ export default function ForecastPage() {
         .select('*').eq('is_active', true).gte('deposit_date', nextWeekStart).order('deposit_date'),
     ]);
 
-    setDrops(dropData || []);
+    // Deduplicate drops by mail_drop_id — keep last record (most recent sync state)
+    const seenDrops = new Map();
+    for (const d of (dropData || [])) seenDrops.set(d.mail_drop_id, d);
+
+    setDrops([...seenDrops.values()]);
     setTransactions(txns || []);
     setProjectedDeposits(projData || []);
     setLoading(false);

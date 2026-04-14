@@ -41,6 +41,11 @@ export async function GET() {
       supabase.from('projected_deposits').select('*').eq('is_active', true).lte('deposit_date', in14d).order('deposit_date'),
     ]);
 
+    // Deduplicate drops by mail_drop_id — keep last record
+    const seenDrops = new Map();
+    for (const d of (drops || [])) seenDrops.set(d.mail_drop_id, d);
+    const dedupedDrops = [...seenDrops.values()];
+
     // Current EPS balance
     const sortedTxns = [...(txns || [])].sort((a, b) => {
       const dd = new Date(b.transaction_date) - new Date(a.transaction_date);
@@ -50,7 +55,7 @@ export async function GET() {
     const currentBalance = sortedTxns[0]?.ending_balance ?? 0;
 
     // Past-due drops
-    const pastDue = (drops || []).filter(d => d.is_live_status && d.drop_est_date < today && !d.drop_act_date);
+    const pastDue = dedupedDrops.filter(d => d.is_live_status && d.drop_est_date < today && !d.drop_act_date);
     const pastDuePostage = pastDue.reduce((s, d) => s + effectivePostage(d), 0);
     const pastDueCount = pastDue.length;
 
@@ -59,7 +64,7 @@ export async function GET() {
     const ensure = (date) => { if (!dayMap[date]) dayMap[date] = { postage: 0, deposits: 0, dropCount: 0 }; };
 
     // Today's drops only (est date === today)
-    for (const d of (drops || [])) {
+    for (const d of dedupedDrops) {
       if (!d.is_live_status || d.drop_act_date || d.drop_est_date !== today) continue;
       ensure(today);
       dayMap[today].postage += effectivePostage(d);
@@ -67,7 +72,7 @@ export async function GET() {
     }
 
     // Future drops (after today)
-    for (const d of (drops || [])) {
+    for (const d of dedupedDrops) {
       if (!d.is_live_status || d.drop_act_date || d.drop_est_date <= today) continue;
       const date = d.drop_est_date;
       if (!date) continue;
@@ -138,7 +143,7 @@ export async function GET() {
       todayPostage: dayMap[today]?.postage ?? 0,
       todayDropCount: dayMap[today]?.dropCount ?? 0,
       totalFuturePostage: dayData.reduce((s, d) => s + d.postage, 0),
-      totalFutureDrops: (drops || []).filter(d => !d.drop_act_date && d.drop_est_date >= today).length,
+      totalFutureDrops: dedupedDrops.filter(d => !d.drop_act_date && d.drop_est_date >= today).length,
       nextDeposit: nextDeposit ? { date: nextDeposit.deposit_date, amount: nextDeposit.amount, note: nextDeposit.note } : null,
       runOutDate: runOutDay?.date ?? null,
       dayData: dayData.slice(0, 14), // first 14 days for context
