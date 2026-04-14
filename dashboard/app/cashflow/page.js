@@ -6,7 +6,7 @@ import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ReferenceLine, ResponsiveContainer, Legend,
 } from 'recharts';
-import { exportToExcel, exportToPDF } from '../../lib/export';
+import { exportToCSV, exportToPDF } from '../../lib/export';
 
 const fmt$ = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtK = (n) => n == null ? '—' : '$' + (Math.abs(n) / 1000).toFixed(1) + 'k';
@@ -343,8 +343,8 @@ export default function CashflowPage() {
 
   if (loading) return <p style={{ color: 'var(--text-muted)' }} className="p-4">Loading...</p>;
 
-  const exportAccountingExcel = () => {
-    exportToExcel(accountingRows.map(r => ({
+  const exportAccountingCSV = () => {
+    exportToCSV(accountingRows.map(r => ({
       'Week': r.week,
       'Postage Due': r.postageDue.toFixed(2),
       'Past-Due Rolled': r.pastDue.toFixed(2),
@@ -352,7 +352,7 @@ export default function CashflowPage() {
       'Expected Invoice': r.expectedInvoice.toFixed(2),
       'Total Expected': r.totalExpected.toFixed(2),
       'Projected Deposit': r.projDeposit.toFixed(2),
-    })), 'weekly-cashflow', 'Weekly Cashflow');
+    })), 'weekly-cashflow');
   };
 
   return (
@@ -365,10 +365,10 @@ export default function CashflowPage() {
             style={{ background: 'var(--accent)', color: 'var(--accent-text)', border: 'none' }}>
             + Add Projected Deposit
           </button>
-          <button onClick={exportAccountingExcel}
+          <button onClick={exportAccountingCSV}
             className="text-sm px-3 py-1.5 rounded"
             style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
-            Export Excel
+            Export CSV
           </button>
         </div>
       </div>
@@ -491,9 +491,9 @@ export default function CashflowPage() {
               ))}
             </div>
           </div>
-          <button onClick={exportAccountingExcel} className="text-xs px-2 py-1 rounded"
+          <button onClick={exportAccountingCSV} className="text-xs px-2 py-1 rounded"
             style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
-            Export All (Excel)
+            Export All (CSV)
           </button>
         </div>
 
@@ -612,18 +612,20 @@ export default function CashflowPage() {
                   return a.localeCompare(b);
                 });
 
-                const exportWeekExcel = () => {
-                  exportToExcel(rowDrops.map(d => ({
+                const exportWeekCSV = () => {
+                  exportToCSV(rowDrops.map(d => ({
+                    'Web ID': d.web_id || '',
                     'Customer': d.customer_name || '',
                     'Product': d.product_category || '',
                     'Drop ID': d.mail_drop_id || '',
                     'Order ID': d.order_id || '',
-                    'Est. Date': d.drop_est_date || '',
-                    'Status': d.drop_status || '',
-                    'Postage': d.postage_amount || 0,
+                    'Sched. Date': d.drop_est_date || '',
+                    'Order Status': d.order_status || '',
+                    'Drop Status': d.drop_status || '',
+                    'Postage': effectivePostage(d).toFixed(2),
                     'Pieces': d.mail_drop_quantity || 0,
                     'Past-Due': d._pastDue ? 'Yes' : 'No',
-                  })), `week-${r.weekStart}`, r.weekStart);
+                  })), `week-${r.weekStart}`);
                 };
 
                 return [
@@ -652,10 +654,10 @@ export default function CashflowPage() {
                     <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)' }}>{fmt$(r.expectedInvoice)}</td>
                     <td className="px-3 py-2.5" style={{ color: 'var(--text-muted)' }}>{r.dropCount}</td>
                     <td className="px-3 py-2.5">
-                      <button onClick={e => { e.stopPropagation(); exportWeekExcel(); }}
+                      <button onClick={e => { e.stopPropagation(); exportWeekCSV(); }}
                         className="text-xs px-2 py-0.5 rounded whitespace-nowrap"
                         style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
-                        Export Week
+                        Export CSV
                       </button>
                     </td>
                   </tr>,
@@ -677,17 +679,19 @@ export default function CashflowPage() {
                             const dayBal = dayBalances[balanceKey];
                             const dayIsGap = dayBal?.isGap;
 
-                            const exportDayExcel = () => {
-                              exportToExcel(dayDrops.map(d => ({
+                            const exportDayCSV = () => {
+                              exportToCSV(dayDrops.map(d => ({
+                                'Web ID': d.web_id || '',
                                 'Customer': d.customer_name || '',
                                 'Product': d.product_category || '',
                                 'Drop ID': d.mail_drop_id || '',
                                 'Order ID': d.order_id || '',
-                                'Est. Date': d.drop_est_date || '',
-                                'Status': d.drop_status || '',
-                                'Postage': d.postage_amount || 0,
+                                'Sched. Date': d.drop_est_date || '',
+                                'Order Status': d.order_status || '',
+                                'Drop Status': d.drop_status || '',
+                                'Postage': effectivePostage(d).toFixed(2),
                                 'Pieces': d.mail_drop_quantity || 0,
-                              })), `drops-${dayKey}`, dayKey);
+                              })), `drops-${dayKey}`);
                             };
 
                             return (
@@ -718,10 +722,10 @@ export default function CashflowPage() {
                                       </span>
                                     )}
                                   </div>
-                                  <button onClick={e => { e.stopPropagation(); exportDayExcel(); }}
+                                  <button onClick={e => { e.stopPropagation(); exportDayCSV(); }}
                                     className="text-xs px-2 py-0.5 rounded"
                                     style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
-                                    Export Day
+                                    Export CSV
                                   </button>
                                 </div>
 

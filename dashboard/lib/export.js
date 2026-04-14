@@ -1,12 +1,24 @@
-// Export utilities — Excel and PDF
+// Export utilities — CSV and PDF
 
-export function exportToExcel(data, filename, sheetName = 'Sheet1') {
-  import('xlsx').then(XLSX => {
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
-    XLSX.writeFile(wb, `${filename}.xlsx`);
-  });
+export function exportToCSV(data, filename) {
+  if (!data || data.length === 0) return;
+  const headers = Object.keys(data[0]);
+  const escape = (v) => {
+    const s = v == null ? '' : String(v);
+    return s.includes(',') || s.includes('"') || s.includes('\n')
+      ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csv = [
+    headers.map(escape).join(','),
+    ...data.map(row => headers.map(k => escape(row[k])).join(',')),
+  ].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${filename}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export function exportToPDF(columns, rows, filename, title) {
