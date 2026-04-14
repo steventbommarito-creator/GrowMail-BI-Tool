@@ -148,7 +148,7 @@ export default function OverviewPage() {
       <div className="rounded-xl border p-5" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>EPS Cashflow — Day by Day</h2>
+            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>EPS Cashflow — Next 14 Days</h2>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>Running balance after daily postage and projected deposits</p>
           </div>
           {runOutDate && (
@@ -216,7 +216,7 @@ export default function OverviewPage() {
       {!loading && dayData.length > 0 && (
         <div className="rounded-xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
           <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
-            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Day-by-Day Breakdown</h2>
+            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>Day-by-Day Breakdown — Next 14 Days</h2>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

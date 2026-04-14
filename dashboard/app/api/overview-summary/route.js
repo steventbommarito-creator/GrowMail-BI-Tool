@@ -27,8 +27,8 @@ function effectivePostage(d) {
 export async function GET() {
   try {
     const supabase = await createClient();
-    const today = new Date().toISOString().split('T')[0];
-    const in8w  = addDays(today, 56);
+    const today   = new Date().toISOString().split('T')[0];
+    const in14d   = addDays(today, 14);
     const since90 = addDays(today, -90);
 
     const [{ data: txns }, { data: drops }, { data: deposits }] = await Promise.all([
@@ -37,8 +37,8 @@ export async function GET() {
         .select('mail_drop_id, order_id, customer_name, product_category, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, mail_drop_quantity')
         .in('order_status', ['DAL [SUBMITTED]', 'DIGITAL READY', 'DIGITAL [STAGING]', 'OUTSOURCED', 'OUTSOURCED [STAGING]'])
         .eq('is_live_status', true)
-        .lte('drop_est_date', in8w),
-      supabase.from('projected_deposits').select('*').eq('is_active', true).order('deposit_date'),
+        .lte('drop_est_date', in14d),
+      supabase.from('projected_deposits').select('*').eq('is_active', true).lte('deposit_date', in14d).order('deposit_date'),
     ]);
 
     // Current EPS balance
@@ -82,8 +82,8 @@ export async function GET() {
       dayMap[date].deposits += p.amount;
     }
 
-    // Build day-by-day array
-    const sortedDates = Object.keys(dayMap).filter(d => d >= today).sort();
+    // Build day-by-day array — today through today + 14 days only
+    const sortedDates = Object.keys(dayMap).filter(d => d >= today && d <= in14d).sort();
     const dayData = [];
     let balance = currentBalance;
 
