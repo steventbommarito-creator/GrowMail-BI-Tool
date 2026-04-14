@@ -58,16 +58,7 @@ export async function GET() {
     const dayMap = {};
     const ensure = (date) => { if (!dayMap[date]) dayMap[date] = { postage: 0, deposits: 0, dropCount: 0 }; };
 
-    // Past-due: group by their original scheduled date
-    const pastDueByDate = {};
-    for (const d of pastDue) {
-      const date = d.drop_est_date || 'unknown';
-      if (!pastDueByDate[date]) pastDueByDate[date] = { postage: 0, dropCount: 0 };
-      pastDueByDate[date].postage += effectivePostage(d);
-      pastDueByDate[date].dropCount += 1;
-    }
-
-    // Today's drops only (est date === today, not past-due)
+    // Today's drops only (est date === today)
     for (const d of (drops || [])) {
       if (!d.is_live_status || d.drop_act_date || d.drop_est_date !== today) continue;
       ensure(today);
@@ -95,23 +86,20 @@ export async function GET() {
     const dayData = [];
     let balance = currentBalance;
 
-    // Past-due rows — one per original scheduled date, sorted chronologically
-    const pastDueDates = Object.keys(pastDueByDate).sort();
-    for (const date of pastDueDates) {
-      const { postage, dropCount } = pastDueByDate[date];
+    // Single past-due row — all overdue drops as one line
+    if (pastDueCount > 0) {
+      const pastDuePostageTotal = pastDue.reduce((s, d) => s + effectivePostage(d), 0);
       const startBalance = balance;
-      balance = +(balance - postage).toFixed(2);
+      balance = +(balance - pastDuePostageTotal).toFixed(2);
       dayData.push({
-        date,
+        date: 'past-due',
         startBalance: +startBalance.toFixed(2),
-        postage: +postage.toFixed(2),
+        postage: +pastDuePostageTotal.toFixed(2),
         deposits: 0,
-        dropCount,
+        dropCount: pastDueCount,
         endBalance: balance,
         isGap: balance < 0,
         isPastDue: true,
-        isFirstPastDue: date === pastDueDates[0],
-        isLastPastDue: date === pastDueDates[pastDueDates.length - 1],
       });
     }
 
