@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '../../../lib/supabaseServer';
 import OpenAI from 'openai';
+import { createHash } from 'crypto';
 
 function addDays(dateStr, n) {
   const d = new Date(dateStr + 'T12:00:00');
@@ -134,7 +135,7 @@ export async function GET() {
     // Next incoming deposit
     const nextDeposit = (deposits || []).find(p => p.deposit_date >= today);
 
-    // Summary stats object to pass to OpenAI
+    // Summary stats object
     const stats = {
       today,
       currentBalance,
@@ -146,17 +147,39 @@ export async function GET() {
       totalFutureDrops: dedupedDrops.filter(d => !d.drop_act_date && d.drop_est_date >= today).length,
       nextDeposit: nextDeposit ? { date: nextDeposit.deposit_date, amount: nextDeposit.amount, note: nextDeposit.note } : null,
       runOutDate: runOutDay?.date ?? null,
-      dayData: dayData.slice(0, 14), // first 14 days for context
+      dayData: dayData.slice(0, 14),
     };
 
-    // Generate AI summary
+    // Hash the key data points — if unchanged, return cached summary
+    const dataHash = createHash('sha256').update(JSON.stringify({
+      today,
+      currentBalance,
+      pastDueCount,
+      pastDuePostage: +pastDuePostage.toFixed(2),
+      dayData: dayData.map(d => ({ date: d.date, postage: d.postage, deposits: d.deposits })),
+      deposits: (deposits || []).map(d => ({ date: d.deposit_date, amount: d.amount })),
+    })).digest('hex');
+
+    // Check cache
+    const { data: cached } = await supabase
+      .from('ai_summary_cache')
+      .select('summary, data_hash, generated_at')
+      .eq('id', 1)
+      .maybeSingle();
+
+    if (cached?.data_hash === dataHash) {
+      // Data unchanged — return cached summary
+      return NextResponse.json({ summary: cached.summary, stats, dayData, cached: true, generatedAt: cached.generated_at });
+    }
+
+    // Data changed — call OpenAI and store result
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const prompt = `You are a financial analyst for GrowMail, a direct mail company. Write a concise 2-3 sentence plain-text executive summary of the current postage cashflow situation. Be specific with numbers. Use natural language like you're briefing a manager. Do not use bullet points or headers. Here is the data:
 
 Today: ${stats.today}
 Current EPS (postage account) balance: $${stats.currentBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-Late/past-due drops: ${stats.pastDueCount} drops totaling $${stats.pastDuePostage.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} in postage (rolled into today)
-Postage needed today (including late): $${stats.todayPostage.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} across ${stats.todayDropCount} drops
+Late/past-due drops: ${stats.pastDueCount} drops totaling $${stats.pastDuePostage.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} in postage
+Postage needed today: $${stats.todayPostage.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} across ${stats.todayDropCount} drops
 Total postage needed across all upcoming drops: $${stats.totalFuturePostage.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} across ${stats.totalFutureDrops} drops
 ${stats.nextDeposit ? `Next projected deposit: $${stats.nextDeposit.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} on ${stats.nextDeposit.date}${stats.nextDeposit.note ? ` (${stats.nextDeposit.note})` : ''}` : 'No projected deposits scheduled.'}
 ${stats.runOutDate ? `Projected balance runs negative on: ${stats.runOutDate}` : 'Balance stays positive through all scheduled drops.'}
@@ -172,8 +195,17 @@ ${stats.dayData.map(d => `  ${d.date}: start $${d.startBalance.toLocaleString()}
     });
 
     const summary = completion.choices[0]?.message?.content?.trim() ?? 'Unable to generate summary.';
+    const generatedAt = new Date().toISOString();
 
-    return NextResponse.json({ summary, stats, dayData });
+    // Upsert into cache (single row, id=1)
+    await supabase.from('ai_summary_cache').upsert({
+      id: 1,
+      summary,
+      data_hash: dataHash,
+      generated_at: generatedAt,
+    }, { onConflict: 'id' });
+
+    return NextResponse.json({ summary, stats, dayData, cached: false, generatedAt });
   } catch (err) {
     console.error('overview-summary error:', err);
     return NextResponse.json({ error: err.message }, { status: 500 });

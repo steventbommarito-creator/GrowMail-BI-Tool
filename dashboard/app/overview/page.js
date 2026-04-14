@@ -43,7 +43,6 @@ export default function OverviewPage() {
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -54,7 +53,6 @@ export default function OverviewPage() {
       const json = await res.json();
       if (json.error) throw new Error(json.error);
       setData(json);
-      setLastUpdated(new Date());
     } catch (e) {
       setError(e.message);
     } finally {
@@ -81,14 +79,7 @@ export default function OverviewPage() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div>
-          <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>Overview</h1>
-          {lastUpdated && (
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Updated {lastUpdated.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Detroit' })} ET
-            </p>
-          )}
-        </div>
+        <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>Overview</h1>
         <button onClick={load} disabled={loading}
           className="text-sm px-3 py-1.5 rounded font-medium flex items-center gap-1.5"
           style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)', cursor: loading ? 'not-allowed' : 'pointer' }}>
@@ -111,7 +102,12 @@ export default function OverviewPage() {
         <div className="flex items-center gap-2 mb-3">
           <span className="text-xs font-semibold px-2 py-0.5 rounded"
             style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>AI Summary</span>
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Updates on each data refresh</span>
+          {data?.generatedAt && (
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Last updated {new Date(data.generatedAt).toLocaleString('en-US', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Detroit' })} ET
+              {data.cached && ' · no data changes'}
+            </span>
+          )}
         </div>
         {loading ? (
           <div className="space-y-2">
