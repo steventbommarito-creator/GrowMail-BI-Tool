@@ -128,8 +128,8 @@ export async function GET() {
       });
     }
 
-    // Find first day balance goes negative
-    const runOutDay = dayData.find(d => d.endBalance < 0);
+    // Find first real date (not past-due synthetic row) where balance goes negative
+    const runOutDay = dayData.find(d => !d.isPastDue && d.endBalance < 0);
 
     // Next incoming deposit
     const nextDeposit = (deposits || []).find(p => p.deposit_date >= today);
