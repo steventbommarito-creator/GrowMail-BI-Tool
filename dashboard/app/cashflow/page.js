@@ -74,11 +74,10 @@ export default function CashflowPage() {
     const in8w = addDays(new Date().toISOString().split('T')[0], 56);
     const today = new Date().toISOString().split('T')[0];
 
-    const [{ data: txns }, { data: dropData }, { data: projData }, { data: termsData }] = await Promise.all([
+    const [{ data: txns }, { data: dropData }, { data: projData }] = await Promise.all([
       supabase.from('usps_transactions').select('*').gte('transaction_date', since90).order('transaction_date', { ascending: true }),
       supabase.from('osprey_mail_drops').select('mail_drop_id, order_id, customer_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, mail_drop_amount, production_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id').in('order_status', ['DAL [SUBMITTED]', 'DIGITAL READY', 'DIGITAL [STAGING]', 'OUTSOURCED', 'OUTSOURCED [STAGING]']).eq('is_live_status', true).lte('drop_est_date', in8w),
       supabase.from('projected_deposits').select('*').eq('is_active', true).order('deposit_date'),
-      supabase.from('customer_terms').select('customer_id, term_label'),
     ]);
 
     // Deduplicate drops by mail_drop_id — keep last record (most recent sync state)
@@ -87,9 +86,16 @@ export default function CashflowPage() {
       seenDrops.set(d.mail_drop_id, d);
     }
 
-    // Build customer_id → term_label map
+    // Fetch terms only for customer_ids present in current drops (avoids 1k row limit on full table)
+    const uniqueCustomerIds = [...new Set([...seenDrops.values()].map(d => d.customer_id).filter(Boolean))];
     const termsMap = {};
-    for (const t of (termsData || [])) termsMap[t.customer_id] = t.term_label;
+    if (uniqueCustomerIds.length > 0) {
+      const { data: termsData } = await supabase
+        .from('customer_terms')
+        .select('customer_id, term_label')
+        .in('customer_id', uniqueCustomerIds);
+      for (const t of (termsData || [])) termsMap[t.customer_id] = t.term_label;
+    }
 
     setTransactions(txns || []);
     setDrops([...seenDrops.values()]);
