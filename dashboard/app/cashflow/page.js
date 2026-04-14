@@ -845,8 +845,11 @@ export default function CashflowPage() {
               'PrePay Postage': r.prepayPostage.toFixed(2),
               'PrePay Amt Due': r.prepayAmtDue.toFixed(2),
               'NET30 Postage': r.net30Postage.toFixed(2),
+              'NET30 Amt Due': r.net30AmtDue.toFixed(2),
               'NET45 Postage': r.net45Postage.toFixed(2),
+              'NET45 Amt Due': r.net45AmtDue.toFixed(2),
               'Other Postage': r.otherPostage.toFixed(2),
+              'Other Amt Due': r.otherAmtDue.toFixed(2),
               'Total Amt Due': r.totalAmtDue.toFixed(2),
             })), 'payment-terms-by-day')}
             className="text-xs px-2 py-1 rounded"
