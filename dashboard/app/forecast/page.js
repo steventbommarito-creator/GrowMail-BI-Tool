@@ -170,7 +170,7 @@ export default function ForecastPage() {
   const [transactions, setTransactions]         = useState([]);
   const [projectedDeposits, setProjectedDeposits] = useState([]);
   const [loading, setLoading]                   = useState(true);
-  const [chartMode, setChartMode]               = useState('order'); // 'order' | 'drop' | 'product'
+  const [chartMode, setChartMode]               = useState('product'); // 'order' | 'drop' | 'product'
   const [selectedProduct, setSelectedProduct]   = useState(null);
 
   const today         = new Date().toISOString().split('T')[0];
