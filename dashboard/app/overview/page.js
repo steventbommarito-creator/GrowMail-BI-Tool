@@ -132,7 +132,7 @@ export default function OverviewPage() {
           {[
             { label: 'EPS Balance', value: fmt$(stats.currentBalance), color: stats.currentBalance >= 0 ? 'var(--status-ok)' : 'var(--status-critical)' },
             { label: 'Late Drops', value: `${stats.pastDueCount} drops`, sub: fmt$(stats.pastDuePostage), color: stats.pastDueCount > 0 ? 'var(--status-warn)' : 'var(--status-ok)' },
-            { label: 'Postage Needed Today', value: fmt$(stats.todayPostage), color: 'var(--text-primary)' },
+            { label: 'Balance After Today', value: fmt$(stats.currentBalance - stats.pastDuePostage - stats.todayPostage), color: (stats.currentBalance - stats.pastDuePostage - stats.todayPostage) >= 0 ? 'var(--status-ok)' : 'var(--status-critical)' },
             { label: 'Balance Runs Out', value: runOutDate ? dayLabel(runOutDate) : 'Stays positive', color: runwayColor },
           ].map(({ label, value, sub, color }) => (
             <div key={label} className="rounded-xl border p-4" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
