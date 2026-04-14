@@ -321,8 +321,11 @@ export default function CashflowPage() {
       const prepayPostage    = prepay.reduce((s, d) => s + d._postage, 0);
       const prepayAmtDue     = prepay.reduce((s, d) => s + d._amtDue, 0);
       const net30Postage     = net30.reduce((s, d) => s + d._postage, 0);
+      const net30AmtDue      = net30.reduce((s, d) => s + d._amtDue, 0);
       const net45Postage     = net45.reduce((s, d) => s + d._postage, 0);
+      const net45AmtDue      = net45.reduce((s, d) => s + d._amtDue, 0);
       const otherPostage     = other.reduce((s, d) => s + d._postage, 0);
+      const otherAmtDue      = other.reduce((s, d) => s + d._amtDue, 0);
 
       return {
         dateKey,
@@ -332,8 +335,11 @@ export default function CashflowPage() {
         prepayPostage,
         prepayAmtDue,
         net30Postage,
+        net30AmtDue,
         net45Postage,
+        net45AmtDue,
         otherPostage,
+        otherAmtDue,
       };
     });
   }, [drops, pastDueDrops, customerTerms, today]);
@@ -853,7 +859,7 @@ export default function CashflowPage() {
           <table className="w-full text-sm">
             <thead style={{ background: 'var(--surface2)' }}>
               <tr>
-                {['Date', 'Drops', 'Total Postage', 'PrePay', 'PrePay Amt Due', 'NET30', 'NET45', 'Other Terms', 'Total Amt Due'].map(h => (
+                {['Date', 'Drops', 'Total Postage', 'PrePay', 'PrePay Amt Due', 'NET30', 'NET30 Amt Due', 'NET45', 'NET45 Amt Due', 'Other', 'Other Amt Due', 'Total Amt Due'].map(h => (
                   <th key={h} className="text-left px-3 py-2 text-xs font-semibold whitespace-nowrap"
                     style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
                 ))}
@@ -884,11 +890,20 @@ export default function CashflowPage() {
                     <td className="px-3 py-2.5" style={{ color: r.net30Postage > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
                       {r.net30Postage > 0 ? fmt$(r.net30Postage) : '—'}
                     </td>
+                    <td className="px-3 py-2.5 font-medium" style={{ color: r.net30AmtDue > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+                      {r.net30AmtDue > 0 ? fmt$(r.net30AmtDue) : '—'}
+                    </td>
                     <td className="px-3 py-2.5" style={{ color: r.net45Postage > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
                       {r.net45Postage > 0 ? fmt$(r.net45Postage) : '—'}
                     </td>
+                    <td className="px-3 py-2.5 font-medium" style={{ color: r.net45AmtDue > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+                      {r.net45AmtDue > 0 ? fmt$(r.net45AmtDue) : '—'}
+                    </td>
                     <td className="px-3 py-2.5" style={{ color: r.otherPostage > 0 ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
                       {r.otherPostage > 0 ? fmt$(r.otherPostage) : '—'}
+                    </td>
+                    <td className="px-3 py-2.5 font-medium" style={{ color: r.otherAmtDue > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
+                      {r.otherAmtDue > 0 ? fmt$(r.otherAmtDue) : '—'}
                     </td>
                     <td className="px-3 py-2.5 font-medium" style={{ color: r.totalAmtDue > 0 ? 'var(--status-ok)' : 'var(--text-muted)' }}>
                       {r.totalAmtDue > 0 ? fmt$(r.totalAmtDue) : '—'}
@@ -904,10 +919,13 @@ export default function CashflowPage() {
                   prepayPostage: acc.prepayPostage + r.prepayPostage,
                   prepayAmtDue: acc.prepayAmtDue + r.prepayAmtDue,
                   net30Postage: acc.net30Postage + r.net30Postage,
+                  net30AmtDue: acc.net30AmtDue + r.net30AmtDue,
                   net45Postage: acc.net45Postage + r.net45Postage,
+                  net45AmtDue: acc.net45AmtDue + r.net45AmtDue,
                   otherPostage: acc.otherPostage + r.otherPostage,
+                  otherAmtDue: acc.otherAmtDue + r.otherAmtDue,
                   totalAmtDue: acc.totalAmtDue + r.totalAmtDue,
-                }), { drops: 0, totalPostage: 0, prepayPostage: 0, prepayAmtDue: 0, net30Postage: 0, net45Postage: 0, otherPostage: 0, totalAmtDue: 0 });
+                }), { drops: 0, totalPostage: 0, prepayPostage: 0, prepayAmtDue: 0, net30Postage: 0, net30AmtDue: 0, net45Postage: 0, net45AmtDue: 0, otherPostage: 0, otherAmtDue: 0, totalAmtDue: 0 });
                 return (
                   <tr style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border)', fontWeight: 600 }}>
                     <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 700 }}>TOTALS</td>
@@ -916,8 +934,11 @@ export default function CashflowPage() {
                     <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.prepayPostage)}</td>
                     <td className="px-3 py-2.5" style={{ color: 'var(--accent)' }}>{fmt$(totals.prepayAmtDue)}</td>
                     <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.net30Postage)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--accent)' }}>{fmt$(totals.net30AmtDue)}</td>
                     <td className="px-3 py-2.5" style={{ color: 'var(--text-primary)' }}>{fmt$(totals.net45Postage)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--accent)' }}>{fmt$(totals.net45AmtDue)}</td>
                     <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)' }}>{fmt$(totals.otherPostage)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--accent)' }}>{fmt$(totals.otherAmtDue)}</td>
                     <td className="px-3 py-2.5" style={{ color: 'var(--status-ok)' }}>{fmt$(totals.totalAmtDue)}</td>
                   </tr>
                 );
