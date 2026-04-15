@@ -16,6 +16,9 @@ const ET_short = (iso) => {
 
 export default function Nav() {
   const pathname = usePathname();
+  // Don't render Nav (or create a Supabase client) on the login page —
+  // having two GoTrueClient instances on the same page causes undefined behavior.
+  if (pathname === '/login') return null;
   const supabase = createClient();
   const { theme, setTheme } = useTheme();
   const [triggerStatus, setTriggerStatus] = useState({});   // idle | running | done | error
