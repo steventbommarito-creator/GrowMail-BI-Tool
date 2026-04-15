@@ -5,10 +5,14 @@ import { createClient as createBaseClient } from '@supabase/supabase-js';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Suspense } from 'react';
 
-// Plain stateless client — OTP verify is serverless, no PKCE/cookies needed
+// flowType: 'implicit' prevents the client from trying to attach a PKCE
+// code challenge to verifyOtp — we never started a PKCE flow so there's
+// nothing in storage, which causes the default PKCE client to send a
+// malformed request. Implicit bypasses that entirely.
 const supabase = createBaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  { auth: { flowType: 'implicit' } }
 );
 
 function LoginForm() {
@@ -78,7 +82,7 @@ function LoginForm() {
       type: 'email',
     });
     setLoading(false);
-    if (err) { setError('Invalid or expired code. Try again or request a new one.'); return; }
+    if (err) { setError(`${err.message} (status: ${err.status})`); return; }
     if (!data?.user?.email?.endsWith('@growmail.com')) {
       await supabase.auth.signOut();
       setError('Access restricted to @growmail.com accounts.');
