@@ -63,6 +63,7 @@ export default function CashflowPage() {
   const [userEmail, setUserEmail] = useState('');
   const [customerTerms, setCustomerTerms] = useState({}); // customer_id → term_label
   const [expandedBillingRows, setExpandedBillingRows] = useState({});
+  const [epsDeductedMap, setEpsDeductedMap] = useState({}); // mail_drop_id → transaction_number (already charged to EPS)
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUserEmail(data?.user?.email || ''));
@@ -98,10 +99,21 @@ export default function CashflowPage() {
       for (const t of (termsData || [])) termsMap[t.customer_id] = t.term_label;
     }
 
+    // Build EPS-deducted map from already-fetched transactions
+    // Any drop whose mail_drop_id appears in usps_transactions has already been charged —
+    // don't deduct it again from the running balance forecast.
+    const epsMap = {};
+    for (const t of (txns || [])) {
+      if (t.osprey_mail_drop_id && !epsMap[t.osprey_mail_drop_id]) {
+        epsMap[t.osprey_mail_drop_id] = t.transaction_number;
+      }
+    }
+
     setTransactions(txns || []);
     setDrops([...seenDrops.values()]);
     setProjectedDeposits(projData || []);
     setCustomerTerms(termsMap);
+    setEpsDeductedMap(epsMap);
     setLoading(false);
   }, []);
 
@@ -137,18 +149,18 @@ export default function CashflowPage() {
   const dayBalances = useMemo(() => {
     const dayMap = {};
 
-    // Past-due drops → today
+    // Past-due drops → today (skip if already charged to EPS)
     for (const d of pastDueDrops) {
       if (!dayMap[today]) dayMap[today] = { postage: 0, deposits: 0 };
-      dayMap[today].postage += effectivePostage(d);
+      dayMap[today].postage += epsDeductedMap[d.mail_drop_id] ? 0 : effectivePostage(d);
     }
 
-    // Future drops by est date
+    // Future drops by est date (skip if already charged to EPS)
     for (const d of drops) {
       if (!d.is_live_status || d.drop_act_date || d.drop_est_date < today) continue;
       const date = d.drop_est_date;
       if (!dayMap[date]) dayMap[date] = { postage: 0, deposits: 0 };
-      dayMap[date].postage += effectivePostage(d);
+      dayMap[date].postage += epsDeductedMap[d.mail_drop_id] ? 0 : effectivePostage(d);
     }
 
     // Projected deposits
@@ -167,7 +179,7 @@ export default function CashflowPage() {
       result[date] = { runningBalance: +balance.toFixed(2), isGap: balance < 0 };
     }
     return result;
-  }, [drops, pastDueDrops, projectedDeposits, currentBalance, today]);
+  }, [drops, pastDueDrops, projectedDeposits, currentBalance, today, epsDeductedMap]);
 
   // Weekly postage needs (8 weeks forward + past-due rolled into current week)
   const weeklyNeeds = useMemo(() => {
@@ -178,10 +190,11 @@ export default function CashflowPage() {
     for (const d of pastDueDrops) {
       const w = currentWeekStart;
       if (!weeks[w]) weeks[w] = { week: w, postage: 0, drops: [], pastDue: 0 };
-      const p = effectivePostage(d);
+      const rawPostage = effectivePostage(d);
+      const p = epsDeductedMap[d.mail_drop_id] ? 0 : rawPostage; // skip if already charged to EPS
       weeks[w].postage += p;
       weeks[w].pastDue += p;
-      weeks[w].drops.push({ ...d, _pastDue: true, _effectivePostage: p });
+      weeks[w].drops.push({ ...d, _pastDue: true, _effectivePostage: rawPostage, _epsTransactionNumber: epsDeductedMap[d.mail_drop_id] || null });
     }
 
     // Future drops
@@ -189,13 +202,14 @@ export default function CashflowPage() {
       if (!d.drop_est_date || d.drop_act_date || (d.drop_est_date < today && d.is_live_status)) continue;
       const w = getWeekStart(d.drop_est_date);
       if (!weeks[w]) weeks[w] = { week: w, postage: 0, drops: [], pastDue: 0 };
-      const p = effectivePostage(d);
+      const rawPostage = effectivePostage(d);
+      const p = epsDeductedMap[d.mail_drop_id] ? 0 : rawPostage; // skip if already charged to EPS
       weeks[w].postage += p;
-      weeks[w].drops.push({ ...d, _effectivePostage: p });
+      weeks[w].drops.push({ ...d, _effectivePostage: rawPostage, _epsTransactionNumber: epsDeductedMap[d.mail_drop_id] || null });
     }
 
     return Object.values(weeks).sort((a, b) => a.week.localeCompare(b.week)).slice(0, 8);
-  }, [drops, today, pastDueDrops]);
+  }, [drops, today, pastDueDrops, epsDeductedMap]);
 
   // EPS balance runway chart — day-by-day for 14 days
   const runwayData = useMemo(() => {
@@ -263,7 +277,7 @@ export default function CashflowPage() {
     // Late mail → today
     for (const d of pastDueDrops) {
       if (!dayMap[today]) dayMap[today] = { drops: [], isLateMail: true };
-      dayMap[today].drops.push({ ...d, _pastDue: true, _effectivePostage: effectivePostage(d) });
+      dayMap[today].drops.push({ ...d, _pastDue: true, _effectivePostage: effectivePostage(d), _epsTransactionNumber: epsDeductedMap[d.mail_drop_id] || null });
     }
 
     // Future drops by est date
@@ -272,18 +286,18 @@ export default function CashflowPage() {
         if (d._pastDue) continue;
         const date = d.drop_est_date || 'unknown';
         if (!dayMap[date]) dayMap[date] = { drops: [], isLateMail: false };
-        dayMap[date].drops.push({ ...d, _effectivePostage: effectivePostage(d) });
+        dayMap[date].drops.push({ ...d }); // _effectivePostage + _epsTransactionNumber already set by weeklyNeeds
       }
     }
 
     return Object.keys(dayMap).sort().map(date => {
       const { drops: dayDrops, isLateMail } = dayMap[date];
-      const postage = dayDrops.reduce((s, d) => s + (d._effectivePostage || 0), 0);
+      const postage = dayDrops.reduce((s, d) => s + (d._epsTransactionNumber ? 0 : (d._effectivePostage || 0)), 0);
       const deposit = projectedDeposits.filter(p => p.deposit_date === date).reduce((s, p) => s + p.amount, 0);
       const bal = dayBalances[date];
       return { date, drops: dayDrops, postage, deposit, isLateMail, runningBalance: bal?.runningBalance, isGap: bal?.isGap };
     });
-  }, [weeklyNeeds, pastDueDrops, projectedDeposits, dayBalances, today]);
+  }, [weeklyNeeds, pastDueDrops, projectedDeposits, dayBalances, today, epsDeductedMap]);
 
   // Payment terms by day — all live drops grouped by date, split by term_label
   const paymentTermsRows = useMemo(() => {
@@ -466,7 +480,7 @@ export default function CashflowPage() {
         {[
           { label: 'Current EPS Balance', value: fmt$(currentBalance), color: currentBalance < 0 ? 'var(--status-critical)' : 'var(--status-ok)' },
           { label: 'Postage Needed (8 wks)', value: fmt$(weeklyNeeds.reduce((s, w) => s + w.postage, 0)) },
-          { label: 'Past-Due Liability', value: fmt$(pastDueDrops.reduce((s, d) => s + (d.postage_amount || 0), 0)), color: pastDueDrops.length ? 'var(--status-warn)' : undefined },
+          { label: 'Past-Due Liability', value: fmt$(pastDueDrops.reduce((s, d) => s + (epsDeductedMap[d.mail_drop_id] ? 0 : (d.postage_amount || 0)), 0)), color: pastDueDrops.length ? 'var(--status-warn)' : undefined },
           { label: 'Projected Deposits', value: fmt$(projectedDeposits.reduce((s, p) => s + p.amount, 0)) },
         ].map(k => (
           <div key={k.label} className="rounded-xl p-4 border"
@@ -625,10 +639,11 @@ export default function CashflowPage() {
                                       {d.drop_est_date || '—'}
                                     </td>
                                   )}
-                                  <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(d._effectivePostage ?? d.postage_amount)}</td>
+                                  <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)', textDecoration: d._epsTransactionNumber ? 'line-through' : 'none', opacity: d._epsTransactionNumber ? 0.45 : 1 }}>{fmt$(d._effectivePostage ?? d.postage_amount)}</td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_quantity?.toLocaleString() || '—'}</td>
-                                  <td className="px-3 py-1.5">
-                                    {d._pastDue && <span className="font-medium" style={{ color: 'var(--status-warn)' }}>PAST DUE</span>}
+                                  <td className="px-3 py-1.5" style={{ whiteSpace: 'nowrap' }}>
+                                    {d._pastDue && <span className="font-medium mr-1" style={{ color: 'var(--status-warn)' }}>PAST DUE</span>}
+                                    {d._epsTransactionNumber && <span className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--status-ok-bg)', color: 'var(--status-ok)', border: '1px solid var(--status-ok)' }}>EPS {d._epsTransactionNumber}</span>}
                                   </td>
                                 </tr>
                               ))}
@@ -660,19 +675,41 @@ export default function CashflowPage() {
                 });
 
                 const exportWeekCSV = () => {
-                  exportToCSV(rowDrops.map(d => ({
-                    'Web ID': d.web_id || '',
-                    'Customer': d.customer_name || '',
-                    'Product': d.product_category || '',
-                    'Drop ID': d.mail_drop_id || '',
-                    'Order ID': d.order_id || '',
-                    'Sched. Date': d.drop_est_date || '',
-                    'Order Status': d.order_status || '',
-                    'Drop Status': d.drop_status || '',
-                    'Postage': effectivePostage(d).toFixed(2),
-                    'Pieces': d.mail_drop_quantity || 0,
-                    'Past-Due': d._pastDue ? 'Yes' : 'No',
-                  })), `week-${r.weekStart}`);
+                  const rows = [];
+                  for (const d of rowDrops) {
+                    const postage = d._effectivePostage ?? effectivePostage(d);
+                    rows.push({
+                      'Web ID': d.web_id || '',
+                      'Customer': d.customer_name || '',
+                      'Product': d.product_category || '',
+                      'Drop ID': d.mail_drop_id || '',
+                      'Order ID': d.order_id || '',
+                      'Sched. Date': d.drop_est_date || '',
+                      'Order Status': d.order_status || '',
+                      'Drop Status': d.drop_status || '',
+                      'Postage': postage.toFixed(2),
+                      'Pieces': d.mail_drop_quantity || 0,
+                      'Past-Due': d._pastDue ? 'Yes' : 'No',
+                      'EPS Transaction': '',
+                    });
+                    if (d._epsTransactionNumber) {
+                      rows.push({
+                        'Web ID': d.web_id || '',
+                        'Customer': d.customer_name || '',
+                        'Product': d.product_category || '',
+                        'Drop ID': d.mail_drop_id || '',
+                        'Order ID': d.order_id || '',
+                        'Sched. Date': d.drop_est_date || '',
+                        'Order Status': d.order_status || '',
+                        'Drop Status': d.drop_status || '',
+                        'Postage': (-postage).toFixed(2),
+                        'Pieces': d.mail_drop_quantity || 0,
+                        'Past-Due': d._pastDue ? 'Yes' : 'No',
+                        'EPS Transaction': d._epsTransactionNumber,
+                      });
+                    }
+                  }
+                  exportToCSV(rows, `week-${r.weekStart}`);
                 };
 
                 return [
@@ -731,18 +768,39 @@ export default function CashflowPage() {
                             const dayIsGap = dayBal?.isGap;
 
                             const exportDayCSV = () => {
-                              exportToCSV(dayDrops.map(d => ({
-                                'Web ID': d.web_id || '',
-                                'Customer': d.customer_name || '',
-                                'Product': d.product_category || '',
-                                'Drop ID': d.mail_drop_id || '',
-                                'Order ID': d.order_id || '',
-                                'Sched. Date': d.drop_est_date || '',
-                                'Order Status': d.order_status || '',
-                                'Drop Status': d.drop_status || '',
-                                'Postage': effectivePostage(d).toFixed(2),
-                                'Pieces': d.mail_drop_quantity || 0,
-                              })), `drops-${dayKey}`);
+                              const rows = [];
+                              for (const d of dayDrops) {
+                                const postage = d._effectivePostage ?? effectivePostage(d);
+                                rows.push({
+                                  'Web ID': d.web_id || '',
+                                  'Customer': d.customer_name || '',
+                                  'Product': d.product_category || '',
+                                  'Drop ID': d.mail_drop_id || '',
+                                  'Order ID': d.order_id || '',
+                                  'Sched. Date': d.drop_est_date || '',
+                                  'Order Status': d.order_status || '',
+                                  'Drop Status': d.drop_status || '',
+                                  'Postage': postage.toFixed(2),
+                                  'Pieces': d.mail_drop_quantity || 0,
+                                  'EPS Transaction': '',
+                                });
+                                if (d._epsTransactionNumber) {
+                                  rows.push({
+                                    'Web ID': d.web_id || '',
+                                    'Customer': d.customer_name || '',
+                                    'Product': d.product_category || '',
+                                    'Drop ID': d.mail_drop_id || '',
+                                    'Order ID': d.order_id || '',
+                                    'Sched. Date': d.drop_est_date || '',
+                                    'Order Status': d.order_status || '',
+                                    'Drop Status': d.drop_status || '',
+                                    'Postage': (-postage).toFixed(2),
+                                    'Pieces': d.mail_drop_quantity || 0,
+                                    'EPS Transaction': d._epsTransactionNumber,
+                                  });
+                                }
+                              }
+                              exportToCSV(rows, `drops-${dayKey}`);
                             };
 
                             return (
@@ -806,10 +864,11 @@ export default function CashflowPage() {
                                               {ET(d.drop_est_date) || '—'}
                                             </td>
                                           )}
-                                          <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(d._effectivePostage ?? d.postage_amount)}</td>
+                                          <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)', textDecoration: d._epsTransactionNumber ? 'line-through' : 'none', opacity: d._epsTransactionNumber ? 0.45 : 1 }}>{fmt$(d._effectivePostage ?? d.postage_amount)}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_quantity?.toLocaleString() || '—'}</td>
-                                          <td className="px-3 py-1.5">
-                                            {d._pastDue && <span className="font-medium" style={{ color: 'var(--status-warn)' }}>PAST DUE</span>}
+                                          <td className="px-3 py-1.5" style={{ whiteSpace: 'nowrap' }}>
+                                            {d._pastDue && <span className="font-medium mr-1" style={{ color: 'var(--status-warn)' }}>PAST DUE</span>}
+                                            {d._epsTransactionNumber && <span className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--status-ok-bg)', color: 'var(--status-ok)', border: '1px solid var(--status-ok)' }}>EPS {d._epsTransactionNumber}</span>}
                                           </td>
                                         </tr>
                                       ))}

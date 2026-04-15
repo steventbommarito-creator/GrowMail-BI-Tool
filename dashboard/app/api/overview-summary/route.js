@@ -47,6 +47,11 @@ export async function GET() {
     for (const d of (drops || [])) seenDrops.set(d.mail_drop_id, d);
     const dedupedDrops = [...seenDrops.values()];
 
+    // Build EPS-deducted set: drop IDs already charged to EPS should not be subtracted again
+    const epsSet = new Set(
+      (txns || []).filter(t => t.osprey_mail_drop_id).map(t => t.osprey_mail_drop_id)
+    );
+
     // Current EPS balance
     const sortedTxns = [...(txns || [])].sort((a, b) => {
       const dd = new Date(b.transaction_date) - new Date(a.transaction_date);
@@ -57,28 +62,28 @@ export async function GET() {
 
     // Past-due drops
     const pastDue = dedupedDrops.filter(d => d.is_live_status && d.drop_est_date < today && !d.drop_act_date);
-    const pastDuePostage = pastDue.reduce((s, d) => s + effectivePostage(d), 0);
+    const pastDuePostage = pastDue.reduce((s, d) => s + (epsSet.has(d.mail_drop_id) ? 0 : effectivePostage(d)), 0);
     const pastDueCount = pastDue.length;
 
     // Day-by-day cashflow: build map of date → { postage, deposits }
     const dayMap = {};
     const ensure = (date) => { if (!dayMap[date]) dayMap[date] = { postage: 0, deposits: 0, dropCount: 0 }; };
 
-    // Today's drops only (est date === today)
+    // Today's drops only (est date === today) — skip if already charged to EPS
     for (const d of dedupedDrops) {
       if (!d.is_live_status || d.drop_act_date || d.drop_est_date !== today) continue;
       ensure(today);
-      dayMap[today].postage += effectivePostage(d);
+      dayMap[today].postage += epsSet.has(d.mail_drop_id) ? 0 : effectivePostage(d);
       dayMap[today].dropCount += 1;
     }
 
-    // Future drops (after today)
+    // Future drops (after today) — skip if already charged to EPS
     for (const d of dedupedDrops) {
       if (!d.is_live_status || d.drop_act_date || d.drop_est_date <= today) continue;
       const date = d.drop_est_date;
       if (!date) continue;
       ensure(date);
-      dayMap[date].postage += effectivePostage(d);
+      dayMap[date].postage += epsSet.has(d.mail_drop_id) ? 0 : effectivePostage(d);
       dayMap[date].dropCount += 1;
     }
 
@@ -92,9 +97,9 @@ export async function GET() {
     const dayData = [];
     let balance = currentBalance;
 
-    // Single past-due row — all overdue drops as one line
+    // Single past-due row — all overdue drops as one line (EPS-matched drops excluded from total)
     if (pastDueCount > 0) {
-      const pastDuePostageTotal = pastDue.reduce((s, d) => s + effectivePostage(d), 0);
+      const pastDuePostageTotal = pastDue.reduce((s, d) => s + (epsSet.has(d.mail_drop_id) ? 0 : effectivePostage(d)), 0);
       const startBalance = balance;
       balance = +(balance - pastDuePostageTotal).toFixed(2);
       dayData.push({
