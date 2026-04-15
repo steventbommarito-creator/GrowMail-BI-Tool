@@ -75,7 +75,7 @@ function LoginForm() {
     const { data, error: err } = await supabase.auth.verifyOtp({
       email,
       token: code,
-      type: 'magiclink',
+      type: 'email',
     });
     setLoading(false);
     if (err) { setError('Invalid or expired code. Try again or request a new one.'); return; }
@@ -91,7 +91,7 @@ function LoginForm() {
     if (resendCooldown > 0) return;
     setError('');
     setOtp('');
-    const email = `${username.trim().toLowerCase()}@growmail.com`;
+    const email = `${username.trim().toLowerCase().replace(/[@\s]/g, '')}@growmail.com`;
     setLoading(true);
     const err = await sendOtp(email);
     setLoading(false);
