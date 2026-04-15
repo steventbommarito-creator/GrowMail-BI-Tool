@@ -5,7 +5,7 @@ import { createClient as createBaseClient } from '@supabase/supabase-js';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Suspense } from 'react';
 
-// flowType: 'implicit' prevents the client from trying to attach a PKCE
+/// flowType: 'implicit' prevents the client from trying to attach a PKCE
 // code challenge to verifyOtp — we never started a PKCE flow so there's
 // nothing in storage, which causes the default PKCE client to send a
 // malformed request. Implicit bypasses that entirely.
@@ -76,13 +76,17 @@ function LoginForm() {
     if (code.length < 6) { setError('Enter the full code.'); return; }
     const email = `${username.trim().toLowerCase().replace(/[@\s]/g, '')}@growmail.com`;
     setLoading(true);
-    const { data, error: err } = await supabase.auth.verifyOtp({
-      email,
-      token: code,
-      type: 'email',
-    });
+    // Try all three types — Supabase stores the token differently
+    // depending on user state (new vs existing) and flow type
+    let data = null, lastErr = null;
+    for (const t of ['email', 'magiclink', 'signup']) {
+      const res = await supabase.auth.verifyOtp({ email, token: code, type: t });
+      console.log(`verifyOtp type:${t} →`, res.error?.message ?? 'OK', res.error?.status ?? '');
+      if (!res.error && res.data?.user) { data = res.data; break; }
+      lastErr = res.error;
+    }
     setLoading(false);
-    if (err) { setError(`${err.message} (status: ${err.status})`); return; }
+    if (!data?.user) { setError(`${lastErr?.message} (status: ${lastErr?.status})`); return; }
     if (!data?.user?.email?.endsWith('@growmail.com')) {
       await supabase.auth.signOut();
       setError('Access restricted to @growmail.com accounts.');
