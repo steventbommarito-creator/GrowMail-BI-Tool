@@ -1,68 +1,50 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { createClient as createBaseClient } from '@supabase/supabase-js';
+import { createClient } from '../../lib/supabase';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Suspense } from 'react';
 
-/// flowType: 'implicit' prevents the client from trying to attach a PKCE
-// code challenge to verifyOtp — we never started a PKCE flow so there's
-// nothing in storage, which causes the default PKCE client to send a
-// malformed request. Implicit bypasses that entirely.
-const supabase = createBaseClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-  { auth: { flowType: 'implicit' } }
-);
-
 function LoginForm() {
-  const [username, setUsername]   = useState('');
-  const [otp, setOtp]             = useState('');
-  const [step, setStep]           = useState('email');   // 'email' | 'otp'
-  const [loading, setLoading]     = useState(false);
-  const [error, setError]         = useState('');
+  const [username, setUsername]         = useState('');
+  const [otp, setOtp]                   = useState('');
+  const [step, setStep]                 = useState('email');
+  const [loading, setLoading]           = useState(false);
+  const [error, setError]               = useState('');
   const [resendCooldown, setResendCooldown] = useState(0);
-  const otpRef  = useRef(null);
-  const router  = useRouter();
-  const searchParams = useSearchParams();
-  const authError    = searchParams.get('error');
+  const otpRef    = useRef(null);
+  const router    = useRouter();
+  const params    = useSearchParams();
 
-  // Already logged in → skip straight to cashflow
+  // One shared client instance — same as Nav, cashflow, etc.
+  const supabase  = createClient();
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user?.email?.endsWith('@growmail.com')) router.replace('/cashflow');
     });
   }, []);
 
-  // Focus OTP input when it appears
   useEffect(() => {
     if (step === 'otp') otpRef.current?.focus();
   }, [step]);
 
-  // Resend cooldown timer
   useEffect(() => {
     if (resendCooldown <= 0) return;
     const t = setTimeout(() => setResendCooldown(c => c - 1), 1000);
     return () => clearTimeout(t);
   }, [resendCooldown]);
 
-  async function sendOtp(email) {
-    // signInWithOtp without emailRedirectTo → Supabase sends a 6-digit code (not a magic link)
-    const { error: err } = await supabase.auth.signInWithOtp({
-      email,
-      options: { shouldCreateUser: true },
-    });
-    return err;
-  }
-
   async function handleSendCode(e) {
     e.preventDefault();
     setError('');
-    const trimmed = username.trim().toLowerCase().replace(/[@\s]/g, '');
-    if (!trimmed) { setError('Enter your username.'); return; }
-    const email = `${trimmed}@growmail.com`;
+    const name = username.trim().toLowerCase().replace(/[@\s]/g, '');
+    if (!name) { setError('Enter your username.'); return; }
     setLoading(true);
-    const err = await sendOtp(email);
+    const { error: err } = await supabase.auth.signInWithOtp({
+      email: `${name}@growmail.com`,
+      options: { shouldCreateUser: true },
+    });
     setLoading(false);
     if (err) { setError(err.message); return; }
     setStep('otp');
@@ -82,7 +64,11 @@ function LoginForm() {
       type: 'email',
     });
     setLoading(false);
-    if (err) { setOtp(''); setError('Code invalid or expired — request a new one.'); return; }
+    if (err) {
+      setOtp('');
+      setError('Invalid or expired code — request a new one below.');
+      return;
+    }
     if (!data?.user?.email?.endsWith('@growmail.com')) {
       await supabase.auth.signOut();
       setError('Access restricted to @growmail.com accounts.');
@@ -97,7 +83,10 @@ function LoginForm() {
     setOtp('');
     const email = `${username.trim().toLowerCase().replace(/[@\s]/g, '')}@growmail.com`;
     setLoading(true);
-    const err = await sendOtp(email);
+    const { error: err } = await supabase.auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: true },
+    });
     setLoading(false);
     if (err) { setError(err.message); return; }
     setResendCooldown(60);
@@ -111,18 +100,19 @@ function LoginForm() {
         <div className="mb-6">
           <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>GrowMail BI</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
-            {step === 'email' ? 'Sign in with your GrowMail account' : `Code sent to ${username}@growmail.com`}
+            {step === 'email'
+              ? 'Sign in with your GrowMail account'
+              : `Code sent to ${username.trim().toLowerCase().replace(/[@\s]/g, '')}@growmail.com`}
           </p>
         </div>
 
-        {authError === 'unauthorized' && (
+        {params.get('error') === 'unauthorized' && (
           <div className="mb-4 rounded-lg px-3 py-2 text-sm"
             style={{ background: 'var(--status-critical-bg)', color: 'var(--status-critical)' }}>
             Access restricted to @growmail.com accounts.
           </div>
         )}
 
-        {/* ── Step 1: Email ── */}
         {step === 'email' && (
           <form onSubmit={handleSendCode} className="space-y-4">
             <div>
@@ -162,7 +152,6 @@ function LoginForm() {
           </form>
         )}
 
-        {/* ── Step 2: OTP ── */}
         {step === 'otp' && (
           <form onSubmit={handleVerify} className="space-y-4">
             <div>
@@ -177,15 +166,15 @@ function LoginForm() {
                 maxLength={8}
                 value={otp}
                 onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 8))}
-                placeholder="123456"
+                placeholder="••••••••"
                 autoComplete="one-time-code"
-                className="w-full px-3 py-2.5 text-sm rounded-lg border outline-none text-center tracking-widest font-mono"
+                className="w-full px-3 py-2.5 rounded-lg border outline-none text-center font-mono"
                 style={{
                   background: 'var(--surface2)',
                   color: 'var(--text-primary)',
                   borderColor: error ? 'var(--status-critical)' : 'var(--border)',
-                  fontSize: '1.4rem',
-                  letterSpacing: '0.4em',
+                  fontSize: '1.6rem',
+                  letterSpacing: '0.35em',
                 }}
               />
             </div>
@@ -202,14 +191,14 @@ function LoginForm() {
             </button>
             <div className="flex items-center justify-between text-xs" style={{ color: 'var(--text-muted)' }}>
               <button type="button" onClick={() => { setStep('email'); setError(''); setOtp(''); }}
-                style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}>
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
                 ← Change email
               </button>
               <button type="button" onClick={handleResend} disabled={resendCooldown > 0}
                 style={{
-                  color: resendCooldown > 0 ? 'var(--text-muted)' : 'var(--accent)',
                   background: 'none', border: 'none',
                   cursor: resendCooldown > 0 ? 'not-allowed' : 'pointer',
+                  color: resendCooldown > 0 ? 'var(--text-muted)' : 'var(--accent)',
                 }}>
                 {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend code'}
               </button>
@@ -222,9 +211,5 @@ function LoginForm() {
 }
 
 export default function LoginPage() {
-  return (
-    <Suspense>
-      <LoginForm />
-    </Suspense>
-  );
+  return <Suspense><LoginForm /></Suspense>;
 }
