@@ -109,6 +109,11 @@ export default function CashflowPage() {
       }
     }
 
+    // DEBUG — remove after verifying
+    console.log('[EPS Debug] epsMap keys:', Object.keys(epsMap).slice(0, 20));
+    console.log('[EPS Debug] drop mail_drop_ids:', [...seenDrops.keys()].slice(0, 20));
+    console.log('[EPS Debug] transactions with osprey_mail_drop_id:', (txns || []).filter(t => t.osprey_mail_drop_id).map(t => ({ drop: t.osprey_mail_drop_id, trx: t.transaction_number, job: t.job_id })));
+
     setTransactions(txns || []);
     setDrops([...seenDrops.values()]);
     setProjectedDeposits(projData || []);
