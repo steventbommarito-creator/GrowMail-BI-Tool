@@ -75,7 +75,7 @@ function LoginForm() {
     const { data, error: err } = await supabase.auth.verifyOtp({
       email,
       token: code,
-      type: 'email',
+      type: 'magiclink',
     });
     setLoading(false);
     if (err) { setError('Invalid or expired code. Try again or request a new one.'); return; }
@@ -163,7 +163,7 @@ function LoginForm() {
           <form onSubmit={handleVerify} className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-                6-digit code
+                Sign-in code
               </label>
               <input
                 ref={otpRef}
