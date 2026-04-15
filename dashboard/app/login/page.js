@@ -82,7 +82,7 @@ function LoginForm() {
       type: 'email',
     });
     setLoading(false);
-    if (err) { setError('Invalid or expired code. Try again or request a new one.'); return; }
+    if (err) { setOtp(''); setError('Code invalid or expired — request a new one.'); return; }
     if (!data?.user?.email?.endsWith('@growmail.com')) {
       await supabase.auth.signOut();
       setError('Access restricted to @growmail.com accounts.');
