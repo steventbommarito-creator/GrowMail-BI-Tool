@@ -110,9 +110,11 @@ export default function CashflowPage() {
     }
 
     // DEBUG — remove after verifying
-    console.log('[EPS Debug] epsMap keys:', Object.keys(epsMap).slice(0, 20));
-    console.log('[EPS Debug] drop mail_drop_ids:', [...seenDrops.keys()].slice(0, 20));
-    console.log('[EPS Debug] transactions with osprey_mail_drop_id:', (txns || []).filter(t => t.osprey_mail_drop_id).map(t => ({ drop: t.osprey_mail_drop_id, trx: t.transaction_number, job: t.job_id })));
+    const TARGET = '271515';
+    console.log('[EPS Debug] 271515 in epsMap?', epsMap[TARGET] ?? 'NOT FOUND');
+    console.log('[EPS Debug] 271515 in drops?', seenDrops.has(TARGET) ? 'YES' : 'NOT FOUND');
+    console.log('[EPS Debug] all epsMap keys:', Object.keys(epsMap));
+    console.log('[EPS Debug] all drop ids:', [...seenDrops.keys()]);
 
     setTransactions(txns || []);
     setDrops([...seenDrops.values()]);
