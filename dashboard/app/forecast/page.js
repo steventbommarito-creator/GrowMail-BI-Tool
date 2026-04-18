@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { createClient } from '../../lib/supabase';
+import { effectivePostage } from '../../lib/postage';
 import {
   AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -153,15 +154,7 @@ function weekRangeLabel(weekStart) {
   return `${s.getMonth() + 1}/${s.getDate()} – ${e.getMonth() + 1}/${e.getDate()}`;
 }
 
-// LDP Postcard postage: only applies when DAL [SUBMITTED] + OUTSOURCED or PRODUCTION drop status
-const effectivePostage = (d) => {
-  if ((d.product_category || '').toLowerCase().includes('ldp postcard')) {
-    const orderOk = (d.order_status || '').toUpperCase() === 'DAL [SUBMITTED]';
-    const dropOk  = ['OUTSOURCED', 'PRODUCTION'].includes((d.drop_status || '').toUpperCase());
-    return (orderOk && dropOk) ? (d.mail_drop_quantity || 0) * 0.244 : 0;
-  }
-  return d.postage_amount || 0;
-};
+// effectivePostage imported from ../../lib/postage — shared across pages
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function ForecastPage() {
@@ -188,10 +181,9 @@ export default function ForecastPage() {
         .gte('drop_est_date', today)           // ← from today (KPI includes current week)
         .lte('drop_est_date', in12w),
       supabase.from('usps_transactions')
-        .select('transaction_number, transaction_date, ending_balance')
+        .select('transaction_number, transaction_date, ending_balance, osprey_mail_drop_id')
         .gte('transaction_date', since90)
-        .order('transaction_date', { ascending: false })
-        .limit(10),
+        .order('transaction_date', { ascending: false }),
       supabase.from('projected_deposits')
         .select('*').eq('is_active', true).gte('deposit_date', nextWeekStart).order('deposit_date'),
     ]);
@@ -218,6 +210,23 @@ export default function ForecastPage() {
     return sorted[0]?.ending_balance ?? 0;
   }, [transactions]);
 
+  // Drops whose mail_drop_id already appears as a charge in EPS have been paid —
+  // don't double-count them in the forecast. Matches the logic on cashflow/overview.
+  const epsSet = useMemo(() => {
+    const s = new Set();
+    for (const t of transactions) {
+      if (t.osprey_mail_drop_id) s.add(t.osprey_mail_drop_id);
+    }
+    return s;
+  }, [transactions]);
+
+  // postage(d) = 0 when the drop is already EPS-charged, otherwise effectivePostage(d).
+  // Defined here so every sum on this page picks up EPS exclusion uniformly.
+  const postage = useCallback(
+    (d) => (epsSet.has(d.mail_drop_id) ? 0 : effectivePostage(d)),
+    [epsSet]
+  );
+
   // ── Product category totals & color palette ───────────────────────────────
   const PALETTE = ['#3b82f6','#10b981','#f59e0b','#8b5cf6','#ef4444','#06b6d4','#f97316','#84cc16','#ec4899','#14b8a6','#a855f7','#6366f1'];
 
@@ -225,10 +234,10 @@ export default function ForecastPage() {
     const out = {};
     for (const d of drops) {
       const cat = d.product_category || 'Unknown';
-      out[cat] = (out[cat] || 0) + effectivePostage(d);
+      out[cat] = (out[cat] || 0) + postage(d);
     }
     return out;
-  }, [drops]);
+  }, [drops, postage]);
 
   // Sorted by total postage desc, assigned stable colors
   const productCategories = useMemo(() =>
@@ -249,7 +258,7 @@ export default function ForecastPage() {
       const ws = getWeekStart(d.drop_est_date);
       if (ws < nextWeekStart) continue; // chart starts next week; current week only in KPI totals
       if (!weekMap[ws]) weekMap[ws] = { week: ws, label: weekRangeLabel(ws), total: 0 };
-      const p  = effectivePostage(d);
+      const p  = postage(d);
       weekMap[ws].total += p;
 
       const ob = orderBucket(d.order_status);
@@ -262,7 +271,7 @@ export default function ForecastPage() {
       weekMap[ws][`p_${cat}`] = (weekMap[ws][`p_${cat}`] || 0) + p;
     }
     return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week)).slice(0, 12);
-  }, [drops]);
+  }, [drops, postage, nextWeekStart]);
 
   // ── Filtered chart data when a product is selected ────────────────────────
   const chartWeeklyBreakdown = useMemo(() => {
@@ -274,7 +283,7 @@ export default function ForecastPage() {
       if ((d.product_category || 'Unknown') !== selectedProduct) continue;
       const ws = getWeekStart(d.drop_est_date);
       if (!weekMap[ws]) weekMap[ws] = { week: ws, label: weekRangeLabel(ws), total: 0 };
-      const p = effectivePostage(d);
+      const p = postage(d);
       weekMap[ws].total += p;
       const ob = orderBucket(d.order_status);
       if (ob) weekMap[ws][`o_${ob}`] = (weekMap[ws][`o_${ob}`] || 0) + p;
@@ -283,7 +292,7 @@ export default function ForecastPage() {
       weekMap[ws][`p_${selectedProduct}`] = (weekMap[ws][`p_${selectedProduct}`] || 0) + p;
     }
     return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week));
-  }, [drops, weeklyBreakdown, selectedProduct]);
+  }, [drops, weeklyBreakdown, selectedProduct, postage]);
 
   // ── EPS runway ────────────────────────────────────────────────────────────
   const runwayData = useMemo(() => {
@@ -301,20 +310,20 @@ export default function ForecastPage() {
   }, [currentBalance, weeklyBreakdown, projectedDeposits, today]);
 
   // ── KPIs ──────────────────────────────────────────────────────────────────
-  const totalPostage = useMemo(() => drops.reduce((s, d) => s + effectivePostage(d), 0), [drops]);
+  const totalPostage = useMemo(() => drops.reduce((s, d) => s + postage(d), 0), [drops, postage]);
   const totalPieces  = useMemo(() => drops.reduce((s, d) => s + (d.mail_drop_quantity || 0), 0), [drops]);
 
   // Bucket totals for pills
   const orderBucketTotals = useMemo(() => {
     const out = {};
-    for (const d of drops) { const b = orderBucket(d.order_status); if (b) out[b] = (out[b] || 0) + effectivePostage(d); }
+    for (const d of drops) { const b = orderBucket(d.order_status); if (b) out[b] = (out[b] || 0) + postage(d); }
     return out;
-  }, [drops]);
+  }, [drops, postage]);
   const dropBucketTotals = useMemo(() => {
     const out = {};
-    for (const d of drops) { const b = dropBucket(d.drop_status); if (b) out[b] = (out[b] || 0) + effectivePostage(d); }
+    for (const d of drops) { const b = dropBucket(d.drop_status); if (b) out[b] = (out[b] || 0) + postage(d); }
     return out;
-  }, [drops]);
+  }, [drops, postage]);
 
   const activeBuckets = chartMode === 'order' ? ORDER_BUCKETS
                       : chartMode === 'drop'  ? DROP_BUCKETS

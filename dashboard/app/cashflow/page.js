@@ -7,6 +7,7 @@ import {
   Tooltip, ReferenceLine, ResponsiveContainer, Legend,
 } from 'recharts';
 import { exportToCSV, exportToPDF } from '../../lib/export';
+import { effectivePostage } from '../../lib/postage';
 
 const fmt$ = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtK = (n) => n == null ? '—' : '$' + (Math.abs(n) / 1000).toFixed(1) + 'k';
@@ -130,14 +131,7 @@ export default function CashflowPage() {
   }, [transactions]);
 
   // LDP Postcard postage: only applies when DAL [SUBMITTED] + OUTSOURCED or PRODUCTION drop status
-  const effectivePostage = (d) => {
-    if ((d.product_category || '').toLowerCase().includes('ldp postcard')) {
-      const orderOk = (d.order_status || '').toUpperCase() === 'DAL [SUBMITTED]';
-      const dropOk  = ['OUTSOURCED', 'PRODUCTION'].includes((d.drop_status || '').toUpperCase());
-      return (orderOk && dropOk) ? (d.mail_drop_quantity || 0) * 0.244 : 0;
-    }
-    return d.postage_amount || 0;
-  };
+  // effectivePostage imported from ../../lib/postage — shared across pages
 
   // Past-due drops: live status AND scheduled date is before today
   const today = new Date().toISOString().split('T')[0];
@@ -480,13 +474,14 @@ export default function CashflowPage() {
         {[
           { label: 'Current EPS Balance', value: fmt$(currentBalance), color: currentBalance < 0 ? 'var(--status-critical)' : 'var(--status-ok)' },
           { label: 'Postage Needed (8 wks)', value: fmt$(weeklyNeeds.reduce((s, w) => s + w.postage, 0)) },
-          { label: 'Past-Due Liability', value: fmt$(pastDueDrops.reduce((s, d) => s + (epsDeductedMap[d.mail_drop_id] ? 0 : (d.postage_amount || 0)), 0)), color: pastDueDrops.length ? 'var(--status-warn)' : undefined },
+          { label: 'Past-Due Liability', value: fmt$(pastDueDrops.reduce((s, d) => s + (epsDeductedMap[d.mail_drop_id] ? 0 : effectivePostage(d)), 0)), sub: `${pastDueDrops.length} drop${pastDueDrops.length === 1 ? '' : 's'}`, color: pastDueDrops.length ? 'var(--status-warn)' : undefined },
           { label: 'Projected Deposits', value: fmt$(projectedDeposits.reduce((s, p) => s + p.amount, 0)) },
         ].map(k => (
           <div key={k.label} className="rounded-xl p-4 border"
             style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
             <p className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>{k.label}</p>
             <p className="text-xl font-bold" style={{ color: k.color || 'var(--text-primary)' }}>{k.value}</p>
+            {k.sub && <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>{k.sub}</p>}
           </div>
         ))}
       </div>
@@ -757,7 +752,9 @@ export default function CashflowPage() {
                         <div className="px-8 py-3 space-y-2">
                           {dayKeys.map(dayKey => {
                             const dayDrops = byDay[dayKey];
-                            const dayPostage = dayDrops.reduce((s, d) => s + (d.postage_amount || 0), 0);
+                            // Use effectivePostage (handles LDP) and zero out EPS-deducted drops so the
+                            // day subtotal matches the row-level strikethroughs below it.
+                            const dayPostage = dayDrops.reduce((s, d) => s + (d._epsTransactionNumber ? 0 : (d._effectivePostage ?? effectivePostage(d))), 0);
                             const isDayExpanded = expandedDays[`${r.weekStart}-${dayKey}`];
                             const label = dayKey === 'past-due' ? '⚠ Late Mail (rolled forward)' : dayLabel(dayKey);
                             const dayDeposit = dayKey !== 'past-due'

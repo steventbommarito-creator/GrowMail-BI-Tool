@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '../../../lib/supabaseServer';
+import { effectivePostage } from '../../../lib/postage';
 import OpenAI from 'openai';
 import { createHash } from 'crypto';
 
@@ -14,15 +15,6 @@ function getWeekStart(dateStr) {
   const day = d.getDay(); // 0=Sun
   d.setDate(d.getDate() - day);
   return d.toISOString().split('T')[0];
-}
-
-function effectivePostage(d) {
-  if ((d.product_category || '').toLowerCase().includes('ldp postcard')) {
-    const orderOk = (d.order_status || '').toUpperCase() === 'DAL [SUBMITTED]';
-    const dropOk  = ['OUTSOURCED', 'PRODUCTION'].includes((d.drop_status || '').toUpperCase());
-    return (orderOk && dropOk) ? (d.mail_drop_quantity || 0) * 0.244 : 0;
-  }
-  return d.postage_amount || 0;
 }
 
 export async function GET() {
