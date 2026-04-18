@@ -244,8 +244,13 @@ export default function CashflowPage() {
       // Invoice Expected: net-terms customers — full drop amount
       const expectedInvoice = terms.reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
 
-      const projDeposit = projectedDeposits.find(p => getWeekStart(p.deposit_date) === w.week);
-      running += (projDeposit?.amount || 0) - w.postage;
+      // Sum ALL projected deposits landing in this week — a week can have more than
+      // one (e.g. separate Stripe settlement + FEDWIRE). .find() only returned the
+      // first, so weeks with multiple deposits were underreported.
+      const projDeposit = projectedDeposits
+        .filter(p => getWeekStart(p.deposit_date) === w.week)
+        .reduce((s, p) => s + (p.amount || 0), 0);
+      running += projDeposit - w.postage;
 
       return {
         week: weekLabel(w.week),
@@ -256,7 +261,7 @@ export default function CashflowPage() {
         expectedStripe,
         expectedInvoice,
         totalExpected: expectedStripe + expectedInvoice,
-        projDeposit: projDeposit?.amount || 0,
+        projDeposit,
         dropCount: w.drops.length,
         drops: w.drops,
         runningBalance: running,
