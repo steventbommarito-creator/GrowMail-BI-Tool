@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
+import Link from 'next/link';
 import { createClient } from '../../lib/supabase';
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -637,7 +638,18 @@ export default function CashflowPage() {
                                   background: di % 2 === 0 ? 'transparent' : 'var(--surface)',
                                   borderTop: '1px solid var(--border)',
                                 }}>
-                                  <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
+                                  <td className="px-3 py-1.5">
+                                    {d.customer_id ? (
+                                      <Link href={`/customers/${encodeURIComponent(d.customer_id)}`}
+                                        className="hover:underline"
+                                        style={{ color: 'var(--accent)' }}
+                                        onClick={e => e.stopPropagation()}>
+                                        {d.customer_name || '—'}
+                                      </Link>
+                                    ) : (
+                                      <span style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</span>
+                                    )}
+                                  </td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_id || '—'}</td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.drop_status || '—'}</td>
@@ -864,7 +876,18 @@ export default function CashflowPage() {
                                           background: di % 2 === 0 ? 'transparent' : 'var(--surface2)',
                                           borderTop: '1px solid var(--border)',
                                         }}>
-                                          <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
+                                          <td className="px-3 py-1.5">
+                                            {d.customer_id ? (
+                                              <Link href={`/customers/${encodeURIComponent(d.customer_id)}`}
+                                                className="hover:underline"
+                                                style={{ color: 'var(--accent)' }}
+                                                onClick={e => e.stopPropagation()}>
+                                                {d.customer_name || '—'}
+                                              </Link>
+                                            ) : (
+                                              <span style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</span>
+                                            )}
+                                          </td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_id || '—'}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.drop_status || '—'}</td>
@@ -1044,7 +1067,18 @@ export default function CashflowPage() {
                                     background: di % 2 === 0 ? 'transparent' : 'var(--surface)',
                                     borderTop: '1px solid var(--border)',
                                   }}>
-                                    <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
+                                    <td className="px-3 py-1.5 font-medium">
+                                      {d.customer_id ? (
+                                        <Link href={`/customers/${encodeURIComponent(d.customer_id)}`}
+                                          className="hover:underline"
+                                          style={{ color: 'var(--accent)' }}
+                                          onClick={e => e.stopPropagation()}>
+                                          {d.customer_name || '—'}
+                                        </Link>
+                                      ) : (
+                                        <span style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</span>
+                                      )}
+                                    </td>
                                     <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.web_id || '—'}</td>
                                     <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_id || '—'}</td>
                                     <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
