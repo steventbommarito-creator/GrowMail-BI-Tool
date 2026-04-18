@@ -5,6 +5,7 @@ import { createClient } from '../../lib/supabase';
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ReferenceLine, ResponsiveContainer, Legend,
+  ComposedChart, Line,
 } from 'recharts';
 import { exportToCSV, exportToPDF } from '../../lib/export';
 import { effectivePostage } from '../../lib/postage';
@@ -57,6 +58,7 @@ export default function CashflowPage() {
   const [projectedDeposits, setProjectedDeposits] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tableViewMode, setTableViewMode] = useState('week'); // 'week' | 'day'
+  const [timelineMode, setTimelineMode] = useState('day');    // 'day' | 'week' (for balance runway chart)
   const [expandedWeeks, setExpandedWeeks] = useState({});
   const [expandedDays, setExpandedDays] = useState({});
   const [showAddDeposit, setShowAddDeposit] = useState(false);
@@ -65,6 +67,7 @@ export default function CashflowPage() {
   const [customerTerms, setCustomerTerms] = useState({}); // customer_id → term_label
   const [expandedBillingRows, setExpandedBillingRows] = useState({});
   const [epsDeductedMap, setEpsDeductedMap] = useState({}); // mail_drop_id → transaction_number (already charged to EPS)
+  const [activeDrawer, setActiveDrawer] = useState(null);   // null | 'balance' | 'postage' | 'pastdue' | 'deposits' — KPI drilldown drawer
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUserEmail(data?.user?.email || ''));
@@ -170,7 +173,12 @@ export default function CashflowPage() {
     const result = {};
     for (const date of sorted) {
       balance += dayMap[date].deposits - dayMap[date].postage;
-      result[date] = { runningBalance: +balance.toFixed(2), isGap: balance < 0 };
+      result[date] = {
+        runningBalance: +balance.toFixed(2),
+        isGap: balance < 0,
+        postage: +dayMap[date].postage.toFixed(2),
+        deposits: +dayMap[date].deposits.toFixed(2),
+      };
     }
     return result;
   }, [drops, pastDueDrops, projectedDeposits, currentBalance, today, epsDeductedMap]);
@@ -206,23 +214,50 @@ export default function CashflowPage() {
   }, [drops, today, pastDueDrops, epsDeductedMap]);
 
   // EPS balance runway chart — day-by-day for 14 days
-  const runwayData = useMemo(() => {
+  // Day-mode: 14 rolling days. Each point carries post-event balance plus the
+  // inflow (deposits) and outflow (postage) on that day for the composed chart.
+  // Deposits are positive (green bar up); postage shown as negative so it renders
+  // below the axis (red bar down) — this makes cash in/out visually obvious.
+  const dailyTimeline = useMemo(() => {
     const data = [];
     let balance = currentBalance;
     for (let i = 0; i <= 14; i++) {
       const date = addDays(today, i);
-      // If dayBalances has events on this date, advance to the post-event balance
-      if (i > 0 && dayBalances[date]) {
-        balance = dayBalances[date].runningBalance;
-      }
+      const entry = dayBalances[date];
+      if (i > 0 && entry) balance = entry.runningBalance;
       data.push({
-        date,
-        balance: +balance.toFixed(2),
+        key: date,
         label: new Date(date + 'T12:00:00').toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }),
+        balance: +balance.toFixed(2),
+        deposits: +(entry?.deposits || 0).toFixed(2),
+        postage:  -(+(entry?.postage  || 0).toFixed(2)),  // negative so it renders below axis
       });
     }
     return data;
   }, [currentBalance, dayBalances, today]);
+
+  // Week-mode: 8 rolling weeks. We reuse weeklyNeeds for postage and sum
+  // projectedDeposits per week. Running balance walks forward one week at a time.
+  const weeklyTimeline = useMemo(() => {
+    const data = [];
+    let balance = currentBalance;
+    for (const w of weeklyNeeds) {
+      const weekDeposits = projectedDeposits
+        .filter(p => getWeekStart(p.deposit_date) === w.week)
+        .reduce((s, p) => s + (p.amount || 0), 0);
+      balance += weekDeposits - w.postage;
+      data.push({
+        key: w.week,
+        label: weekLabel(w.week),
+        balance: +balance.toFixed(2),
+        deposits: +weekDeposits.toFixed(2),
+        postage:  -(+w.postage.toFixed(2)),
+      });
+    }
+    return data;
+  }, [currentBalance, weeklyNeeds, projectedDeposits]);
+
+  const timelineData = timelineMode === 'week' ? weeklyTimeline : dailyTimeline;
 
   // Accounting weekly table: postage due, expected stripe, expected invoice
   const accountingRows = useMemo(() => {
@@ -357,6 +392,36 @@ export default function CashflowPage() {
     });
   }, [drops, pastDueDrops, customerTerms, today]);
 
+  // Flat drop list for the "Postage Needed (8 wks)" drawer — one row per contributing
+  // drop, sorted by est date, with EPS-matched drops filtered out so the list matches
+  // the KPI number exactly.
+  const postageDrilldown = useMemo(() => {
+    const rows = [];
+    for (const w of weeklyNeeds) {
+      for (const d of w.drops) {
+        if (epsDeductedMap[d.mail_drop_id]) continue; // already charged
+        rows.push({
+          ...d,
+          _week: w.week,
+          _postage: d._effectivePostage ?? effectivePostage(d),
+        });
+      }
+    }
+    return rows.sort((a, b) => (a.drop_est_date || '').localeCompare(b.drop_est_date || ''));
+  }, [weeklyNeeds, epsDeductedMap]);
+
+  // Recent EPS transactions for the "Current EPS Balance" drawer — newest first,
+  // capped at 20 so the drawer stays skimmable.
+  const recentTransactions = useMemo(() => {
+    return [...transactions]
+      .sort((a, b) => {
+        const dd = new Date(b.transaction_date) - new Date(a.transaction_date);
+        if (dd !== 0) return dd;
+        return Number(b.transaction_number) - Number(a.transaction_number);
+      })
+      .slice(0, 20);
+  }, [transactions]);
+
   async function addProjectedDeposit() {
     if (!newDeposit.date || !newDeposit.amount) return;
     const { error } = await supabase.from('projected_deposits').upsert({
@@ -474,37 +539,75 @@ export default function CashflowPage() {
         </div>
       )}
 
-      {/* KPI Cards */}
+      {/* KPI Cards — each one click-opens a right-side drawer with the underlying rows */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: 'Current EPS Balance', value: fmt$(currentBalance), color: currentBalance < 0 ? 'var(--status-critical)' : 'var(--status-ok)', title: 'USPS Electronic Payment System — the prepaid postage account drops are charged against.' },
-          { label: 'Postage Needed (8 wks)', value: fmt$(weeklyNeeds.reduce((s, w) => s + w.postage, 0)), title: 'Sum of expected postage for all upcoming drops in the next 8 weeks. Drops already charged to EPS are excluded.' },
-          { label: 'Past-Due Liability', value: fmt$(pastDueDrops.reduce((s, d) => s + (epsDeductedMap[d.mail_drop_id] ? 0 : effectivePostage(d)), 0)), sub: `${pastDueDrops.length} drop${pastDueDrops.length === 1 ? '' : 's'}`, color: pastDueDrops.length ? 'var(--status-warn)' : undefined, title: 'Postage owed on drops whose scheduled date has passed but never actually mailed. Drops already charged to EPS are excluded.' },
-          { label: 'Projected Deposits', value: fmt$(projectedDeposits.reduce((s, p) => s + p.amount, 0)), title: 'Total of active projected deposits (Stripe settlements, FEDWIRE, etc.) not yet matched to a real EPS deposit.' },
+          { drawerId: 'balance',  label: 'Current EPS Balance', value: fmt$(currentBalance), color: currentBalance < 0 ? 'var(--status-critical)' : 'var(--status-ok)', title: 'USPS Electronic Payment System — the prepaid postage account drops are charged against. Click to see recent transactions.' },
+          { drawerId: 'postage',  label: 'Postage Needed (8 wks)', value: fmt$(weeklyNeeds.reduce((s, w) => s + w.postage, 0)), title: 'Sum of expected postage for all upcoming drops in the next 8 weeks. Drops already charged to EPS are excluded. Click to see contributing drops.' },
+          { drawerId: 'pastdue',  label: 'Past-Due Liability', value: fmt$(pastDueDrops.reduce((s, d) => s + (epsDeductedMap[d.mail_drop_id] ? 0 : effectivePostage(d)), 0)), sub: `${pastDueDrops.length} drop${pastDueDrops.length === 1 ? '' : 's'}`, color: pastDueDrops.length ? 'var(--status-warn)' : undefined, title: 'Postage owed on drops whose scheduled date has passed but never actually mailed. Drops already charged to EPS are excluded. Click to see each drop.' },
+          { drawerId: 'deposits', label: 'Projected Deposits', value: fmt$(projectedDeposits.reduce((s, p) => s + p.amount, 0)), title: 'Total of active projected deposits (Stripe settlements, FEDWIRE, etc.) not yet matched to a real EPS deposit. Click to see each deposit.' },
         ].map(k => (
-          <div key={k.label} className="rounded-xl p-4 border" title={k.title}
-            style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-            <p className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>{k.label}</p>
+          <button key={k.label} onClick={() => setActiveDrawer(k.drawerId)} title={k.title}
+            className="rounded-xl p-4 border text-left transition-all hover:shadow-md"
+            style={{ background: 'var(--surface)', borderColor: 'var(--border)', cursor: 'pointer' }}>
+            <p className="text-xs mb-1 flex items-center justify-between" style={{ color: 'var(--text-muted)' }}>
+              <span>{k.label}</span>
+              <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>↗</span>
+            </p>
             <p className="text-xl font-bold" style={{ color: k.color || 'var(--text-primary)' }}>{k.value}</p>
             {k.sub && <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>{k.sub}</p>}
-          </div>
+          </button>
         ))}
       </div>
 
-      {/* Balance Runway Chart */}
+      {/* Balance Runway Chart — bars for inflow/outflow, line for running balance */}
       <div className="rounded-xl p-4 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-        <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>
-          EPS Balance Runway — Next 14 Days
-        </h2>
-        <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={runwayData}>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
+            EPS Balance Runway — {timelineMode === 'week' ? 'Next 8 Weeks' : 'Next 14 Days'}
+          </h2>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <span className="inline-flex items-center gap-1">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--status-ok)' }}></span>
+                Deposits
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--status-critical)' }}></span>
+                Postage
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="inline-block w-4 h-0.5" style={{ background: 'var(--accent)' }}></span>
+                Balance
+              </span>
+            </div>
+            <div className="flex rounded overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+              {['day', 'week'].map(mode => (
+                <button key={mode} onClick={() => setTimelineMode(mode)}
+                  className="text-xs px-2 py-0.5 font-medium"
+                  style={{
+                    background: timelineMode === mode ? 'var(--accent)' : 'var(--surface2)',
+                    color: timelineMode === mode ? 'white' : 'var(--text-secondary)',
+                  }}>
+                  {mode === 'day' ? 'Day' : 'Week'}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height={260}>
+          <ComposedChart data={timelineData}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
             <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
             <YAxis tickFormatter={fmtK} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
-            <Tooltip formatter={(v) => fmt$(v)} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
-            <ReferenceLine y={0} stroke="var(--status-critical)" strokeDasharray="4 4" />
-            <Area type="monotone" dataKey="balance" stroke="var(--accent)" fill="var(--accent-light)" strokeWidth={2} />
-          </AreaChart>
+            <Tooltip
+              formatter={(v, name) => [fmt$(Math.abs(v)), name]}
+              contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+            <ReferenceLine y={0} stroke="var(--text-muted)" />
+            <Bar dataKey="deposits" name="Deposits" fill="var(--status-ok)" radius={[2, 2, 0, 0]} />
+            <Bar dataKey="postage"  name="Postage"  fill="var(--status-critical)" radius={[0, 0, 2, 2]} />
+            <Line type="monotone" dataKey="balance" name="Balance" stroke="var(--accent)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+          </ComposedChart>
         </ResponsiveContainer>
       </div>
 
@@ -1174,6 +1277,180 @@ export default function CashflowPage() {
           </table>
         </div>
       </div>
+
+      {/* KPI Drilldown Drawer — slides in from the right, shows rows backing the clicked KPI.
+          Click outside (the dark backdrop) or the × button to close. */}
+      {activeDrawer && (
+        <div className="fixed inset-0 z-40" onClick={() => setActiveDrawer(null)}
+          style={{ background: 'rgba(0,0,0,0.35)' }}>
+          <div onClick={(e) => e.stopPropagation()}
+            className="fixed top-0 right-0 h-full w-full md:w-[640px] overflow-y-auto shadow-2xl"
+            style={{ background: 'var(--surface)', borderLeft: '1px solid var(--border)' }}>
+            <div className="px-5 py-4 flex items-center justify-between sticky top-0 z-10"
+              style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
+              <div>
+                <h3 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
+                  {activeDrawer === 'balance'  && 'Recent EPS Transactions'}
+                  {activeDrawer === 'postage'  && 'Upcoming Drops (Next 8 Weeks)'}
+                  {activeDrawer === 'pastdue'  && 'Past-Due Drops'}
+                  {activeDrawer === 'deposits' && 'Projected Deposits'}
+                </h3>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                  {activeDrawer === 'balance'  && `Last ${recentTransactions.length} USPS transactions, newest first`}
+                  {activeDrawer === 'postage'  && `${postageDrilldown.length} drop${postageDrilldown.length === 1 ? '' : 's'} contributing to the total`}
+                  {activeDrawer === 'pastdue'  && `${pastDueDrops.length} drop${pastDueDrops.length === 1 ? '' : 's'} scheduled before today without an actual drop date`}
+                  {activeDrawer === 'deposits' && `${projectedDeposits.length} active projected deposit${projectedDeposits.length === 1 ? '' : 's'}`}
+                </p>
+              </div>
+              <button onClick={() => setActiveDrawer(null)}
+                className="text-lg px-2 py-0.5 rounded"
+                style={{ color: 'var(--text-muted)', background: 'var(--surface2)' }}>×</button>
+            </div>
+
+            <div className="p-5">
+              {/* EPS Balance → recent transactions */}
+              {activeDrawer === 'balance' && (
+                <table className="w-full text-xs">
+                  <thead style={{ color: 'var(--text-muted)' }}>
+                    <tr>
+                      <th className="text-left py-1.5">Date</th>
+                      <th className="text-left py-1.5">Bucket</th>
+                      <th className="text-right py-1.5">Amount</th>
+                      <th className="text-right py-1.5">Balance</th>
+                      <th className="text-left py-1.5 pl-2">Drop</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentTransactions.map(t => (
+                      <tr key={t.transaction_number} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td className="py-1.5" style={{ color: 'var(--text-secondary)' }}>{ET(t.transaction_date)}</td>
+                        <td className="py-1.5">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded"
+                            style={{
+                              background: t.transaction_bucket === 'matched' ? 'var(--status-ok-bg)' :
+                                          t.transaction_bucket === 'deposit' ? 'var(--accent-light)' :
+                                          t.transaction_bucket === 'dmm' ? 'var(--status-warn-bg)' : 'var(--surface2)',
+                              color: t.transaction_bucket === 'matched' ? 'var(--status-ok)' :
+                                     t.transaction_bucket === 'deposit' ? 'var(--accent)' :
+                                     t.transaction_bucket === 'dmm' ? 'var(--status-warn)' : 'var(--text-muted)',
+                            }}>
+                            {t.transaction_bucket?.toUpperCase() || 'UNKNOWN'}
+                          </span>
+                        </td>
+                        <td className="text-right py-1.5" style={{ color: Number(t.amount) >= 0 ? 'var(--status-ok)' : 'var(--status-critical)' }}>
+                          {fmt$(t.amount)}
+                        </td>
+                        <td className="text-right py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(t.ending_balance)}</td>
+                        <td className="py-1.5 pl-2" style={{ color: 'var(--text-muted)' }}>
+                          {t.osprey_mail_drop_id || (t.is_dmm ? 'DMM' : '—')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {/* Postage Needed → upcoming drops */}
+              {activeDrawer === 'postage' && (
+                <table className="w-full text-xs">
+                  <thead style={{ color: 'var(--text-muted)' }}>
+                    <tr>
+                      <th className="text-left py-1.5">Est Date</th>
+                      <th className="text-left py-1.5">Customer</th>
+                      <th className="text-left py-1.5">Product</th>
+                      <th className="text-right py-1.5">Qty</th>
+                      <th className="text-right py-1.5">Postage</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {postageDrilldown.map(d => (
+                      <tr key={d.mail_drop_id} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td className="py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.drop_est_date || '—'}</td>
+                        <td className="py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
+                        <td className="py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
+                        <td className="text-right py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_quantity?.toLocaleString() || '—'}</td>
+                        <td className="text-right py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(d._postage)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {/* Past-Due → each overdue drop */}
+              {activeDrawer === 'pastdue' && (
+                pastDueDrops.length === 0 ? (
+                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No past-due drops. 🎉</p>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead style={{ color: 'var(--text-muted)' }}>
+                      <tr>
+                        <th className="text-left py-1.5">Est Date</th>
+                        <th className="text-left py-1.5">Days Late</th>
+                        <th className="text-left py-1.5">Customer</th>
+                        <th className="text-left py-1.5">Product</th>
+                        <th className="text-right py-1.5">Postage</th>
+                        <th className="text-left py-1.5 pl-2">EPS?</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...pastDueDrops]
+                        .sort((a, b) => (a.drop_est_date || '').localeCompare(b.drop_est_date || ''))
+                        .map(d => {
+                          const daysLate = Math.floor((new Date(today + 'T12:00:00') - new Date((d.drop_est_date || today) + 'T12:00:00')) / 86400000);
+                          const matched = !!epsDeductedMap[d.mail_drop_id];
+                          return (
+                            <tr key={d.mail_drop_id} style={{ borderTop: '1px solid var(--border)' }}>
+                              <td className="py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.drop_est_date || '—'}</td>
+                              <td className="py-1.5" style={{ color: daysLate > 7 ? 'var(--status-critical)' : 'var(--status-warn)' }}>{daysLate}d</td>
+                              <td className="py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
+                              <td className="py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
+                              <td className="text-right py-1.5 font-medium"
+                                style={{ color: matched ? 'var(--text-muted)' : 'var(--text-primary)',
+                                         textDecoration: matched ? 'line-through' : 'none' }}>
+                                {fmt$(effectivePostage(d))}
+                              </td>
+                              <td className="py-1.5 pl-2 text-[10px]" style={{ color: matched ? 'var(--status-ok)' : 'var(--text-muted)' }}>
+                                {matched ? `✓ #${epsDeductedMap[d.mail_drop_id]}` : '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                )
+              )}
+
+              {/* Projected Deposits → each scheduled deposit */}
+              {activeDrawer === 'deposits' && (
+                projectedDeposits.length === 0 ? (
+                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No projected deposits.</p>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead style={{ color: 'var(--text-muted)' }}>
+                      <tr>
+                        <th className="text-left py-1.5">Date</th>
+                        <th className="text-right py-1.5">Amount</th>
+                        <th className="text-left py-1.5 pl-2">Note</th>
+                        <th className="text-left py-1.5 pl-2">By</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {projectedDeposits.map(p => (
+                        <tr key={p.id} style={{ borderTop: '1px solid var(--border)' }}>
+                          <td className="py-1.5" style={{ color: 'var(--text-secondary)' }}>{ET(p.deposit_date)}</td>
+                          <td className="text-right py-1.5 font-medium" style={{ color: 'var(--status-ok)' }}>{fmt$(p.amount)}</td>
+                          <td className="py-1.5 pl-2" style={{ color: 'var(--text-muted)' }}>{p.note || '—'}</td>
+                          <td className="py-1.5 pl-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>{p.created_by || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
