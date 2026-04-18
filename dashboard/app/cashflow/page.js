@@ -109,13 +109,6 @@ export default function CashflowPage() {
       }
     }
 
-    // DEBUG — remove after verifying
-    const TARGET = '271515';
-    console.log('[EPS Debug] 271515 in epsMap?', epsMap[TARGET] ?? 'NOT FOUND');
-    console.log('[EPS Debug] 271515 in drops?', seenDrops.has(TARGET) ? 'YES' : 'NOT FOUND');
-    console.log('[EPS Debug] all epsMap keys:', Object.keys(epsMap));
-    console.log('[EPS Debug] all drop ids:', [...seenDrops.keys()]);
-
     setTransactions(txns || []);
     setDrops([...seenDrops.values()]);
     setProjectedDeposits(projData || []);
