@@ -907,19 +907,40 @@ export default function CashflowPage() {
               Billing Forecast by Day
             </h2>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              PrePay = order balance to charge · NET30/45/Other = drop amount to invoice
+              <span style={{ color: 'var(--accent)' }}>PrePay → Stripe</span> (charged on/around drop date) ·{' '}
+              <span style={{ color: 'var(--text-secondary)' }}>NET30 / NET45 / Other → NetSuite invoice</span>{' '}
+              (collection est. = drop date + term days)
             </p>
           </div>
           <button
-            onClick={() => exportToCSV(paymentTermsRows.map(r => ({
-              'Date': r.dateKey === 'past-due' ? 'Past Due' : r.dateKey,
-              'Drops': r.drops.length,
-              'PrePay (charge)': r.prepayCharge.toFixed(2),
-              'NET30 (invoice)': r.net30Invoice.toFixed(2),
-              'NET45 (invoice)': r.net45Invoice.toFixed(2),
-              'Other Terms (invoice)': r.otherInvoice.toFixed(2),
-              'Total': r.total.toFixed(2),
-            })), 'billing-forecast')}
+            onClick={() => {
+              // Drop-level export: one row per drop with bill via + est collection so the
+              // user can feed it straight into AR tooling or cross-check NetSuite.
+              const rows = [];
+              for (const r of paymentTermsRows) {
+                for (const d of r.drops) {
+                  const billingAmt = d._term === 'PrePay'
+                    ? Math.max(0, (d.order_amount || 0) - (d.payment_amount_applied || 0))
+                    : (d.mail_drop_amount || 0);
+                  const billVia = d._term === 'PrePay' ? 'Stripe' : 'NetSuite';
+                  const lag = d._term === 'NET30' ? 30 : d._term === 'NET45' ? 45 : d._term === 'PrePay' ? 0 : 30;
+                  const estCollection = d.drop_est_date ? addDays(d.drop_est_date, lag) : '';
+                  rows.push({
+                    'Date': r.dateKey === 'past-due' ? 'Past Due' : r.dateKey,
+                    'Customer': d.customer_name || '',
+                    'Web ID': d.web_id || '',
+                    'Drop ID': d.mail_drop_id || '',
+                    'Product': d.product_category || '',
+                    'Terms': d._term || '',
+                    'Bill Via': billVia,
+                    'Est Invoice Date': d.drop_est_date || '',
+                    'Est Collection Date': estCollection,
+                    'Amount': billingAmt.toFixed(2),
+                  });
+                }
+              }
+              exportToCSV(rows, 'billing-forecast');
+            }}
             className="text-xs px-2 py-1 rounded"
             style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
             Export CSV
@@ -998,7 +1019,7 @@ export default function CashflowPage() {
                           <table className="w-full text-xs">
                             <thead>
                               <tr style={{ background: 'var(--surface)' }}>
-                                {['Customer', 'Web ID', 'Drop ID', 'Product', 'Terms', 'Sched. Date', 'Drop Status', 'Amount'].map(h => (
+                                {['Customer', 'Web ID', 'Drop ID', 'Product', 'Terms', 'Bill Via', 'Sched. Date', 'Est Collection', 'Drop Status', 'Amount'].map(h => (
                                   <th key={h} className="text-left px-3 py-1.5 font-semibold"
                                     style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
                                 ))}
@@ -1009,6 +1030,15 @@ export default function CashflowPage() {
                                 const billingAmt = d._term === 'PrePay'
                                   ? Math.max(0, (d.order_amount || 0) - (d.payment_amount_applied || 0))
                                   : (d.mail_drop_amount || 0);
+                                const billVia = d._term === 'PrePay' ? 'Stripe' : 'NetSuite';
+                                // Collection lag: PrePay charges immediately, NET30/45 per their term;
+                                // Other is estimated at NET30 and flagged with a "?" so it's obvious.
+                                const collectionLag = d._term === 'NET30' ? 30
+                                                    : d._term === 'NET45' ? 45
+                                                    : d._term === 'PrePay' ? 0
+                                                    : 30;
+                                const collectionEstimated = !['PrePay', 'NET30', 'NET45'].includes(d._term);
+                                const estCollection = d.drop_est_date ? addDays(d.drop_est_date, collectionLag) : null;
                                 return (
                                   <tr key={d.mail_drop_id || di} style={{
                                     background: di % 2 === 0 ? 'transparent' : 'var(--surface)',
@@ -1029,9 +1059,18 @@ export default function CashflowPage() {
                                         {d._term}
                                       </span>
                                     </td>
+                                    <td className="px-3 py-1.5" style={{ color: billVia === 'Stripe' ? 'var(--accent)' : 'var(--text-secondary)' }}>
+                                      {billVia}
+                                    </td>
                                     <td className="px-3 py-1.5" style={{ color: d._pastDue ? 'var(--status-warn)' : 'var(--text-secondary)' }}>
                                       {d.drop_est_date ? ET(d.drop_est_date) : '—'}
                                       {d._pastDue && <span className="ml-1" style={{ color: 'var(--status-warn)' }}>⚠</span>}
+                                    </td>
+                                    <td className="px-3 py-1.5"
+                                      title={collectionEstimated ? 'Assumed NET30 — confirm actual terms' : undefined}
+                                      style={{ color: collectionEstimated ? 'var(--text-muted)' : 'var(--text-secondary)' }}>
+                                      {estCollection ? ET(estCollection) : '—'}
+                                      {collectionEstimated && estCollection && <span className="ml-1" style={{ color: 'var(--text-muted)' }}>?</span>}
                                     </td>
                                     <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.drop_status || '—'}</td>
                                     <td className="px-3 py-1.5 font-bold" style={{ color: billingAmt > 0 ? 'var(--status-ok)' : 'var(--text-muted)' }}>
