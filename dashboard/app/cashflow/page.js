@@ -472,12 +472,12 @@ export default function CashflowPage() {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: 'Current EPS Balance', value: fmt$(currentBalance), color: currentBalance < 0 ? 'var(--status-critical)' : 'var(--status-ok)' },
-          { label: 'Postage Needed (8 wks)', value: fmt$(weeklyNeeds.reduce((s, w) => s + w.postage, 0)) },
-          { label: 'Past-Due Liability', value: fmt$(pastDueDrops.reduce((s, d) => s + (epsDeductedMap[d.mail_drop_id] ? 0 : effectivePostage(d)), 0)), sub: `${pastDueDrops.length} drop${pastDueDrops.length === 1 ? '' : 's'}`, color: pastDueDrops.length ? 'var(--status-warn)' : undefined },
-          { label: 'Projected Deposits', value: fmt$(projectedDeposits.reduce((s, p) => s + p.amount, 0)) },
+          { label: 'Current EPS Balance', value: fmt$(currentBalance), color: currentBalance < 0 ? 'var(--status-critical)' : 'var(--status-ok)', title: 'USPS Electronic Payment System — the prepaid postage account drops are charged against.' },
+          { label: 'Postage Needed (8 wks)', value: fmt$(weeklyNeeds.reduce((s, w) => s + w.postage, 0)), title: 'Sum of expected postage for all upcoming drops in the next 8 weeks. Drops already charged to EPS are excluded.' },
+          { label: 'Past-Due Liability', value: fmt$(pastDueDrops.reduce((s, d) => s + (epsDeductedMap[d.mail_drop_id] ? 0 : effectivePostage(d)), 0)), sub: `${pastDueDrops.length} drop${pastDueDrops.length === 1 ? '' : 's'}`, color: pastDueDrops.length ? 'var(--status-warn)' : undefined, title: 'Postage owed on drops whose scheduled date has passed but never actually mailed. Drops already charged to EPS are excluded.' },
+          { label: 'Projected Deposits', value: fmt$(projectedDeposits.reduce((s, p) => s + p.amount, 0)), title: 'Total of active projected deposits (Stripe settlements, FEDWIRE, etc.) not yet matched to a real EPS deposit.' },
         ].map(k => (
-          <div key={k.label} className="rounded-xl p-4 border"
+          <div key={k.label} className="rounded-xl p-4 border" title={k.title}
             style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
             <p className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>{k.label}</p>
             <p className="text-xl font-bold" style={{ color: k.color || 'var(--text-primary)' }}>{k.value}</p>
@@ -551,6 +551,18 @@ export default function CashflowPage() {
             style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
             Export All (CSV)
           </button>
+        </div>
+
+        {/* Legend */}
+        <div className="px-4 py-2 flex items-center gap-4 text-xs" style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+          <span className="flex items-center gap-1.5">
+            <span style={{ textDecoration: 'line-through', opacity: 0.45, color: 'var(--text-primary)' }}>$123.45</span>
+            <span>= already charged to EPS (not re-deducted from running balance)</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--status-ok-bg)', color: 'var(--status-ok)', border: '1px solid var(--status-ok)', fontSize: '0.7rem' }}>EPS 12345</span>
+            <span>= EPS transaction number</span>
+          </span>
         </div>
 
         {/* Column headers */}
