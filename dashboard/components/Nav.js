@@ -5,6 +5,8 @@ import { usePathname } from 'next/navigation';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '../lib/supabase';
 import { useTheme } from '../context/ThemeContext';
+import PresenceAvatars from './PresenceAvatars';
+import LiveCursors from './LiveCursors';
 
 const ET_short = (iso) => {
   if (!iso) return null;
@@ -140,6 +142,7 @@ export default function Nav() {
       </div>
 
       <div className="flex items-center gap-3">
+        <PresenceAvatars />
         {['osprey', 'usps'].map(source => {
           const status = triggerStatus[source] || 'idle';
           const sync = lastSync[source];
@@ -205,6 +208,11 @@ export default function Nav() {
           Sign out
         </button>
       </div>
+
+      {/* Per-page cursor overlay. Channel name is scoped by pathname so cursors
+          only appear between users viewing the same page — two people on
+          /cashflow see each other, one on /forecast doesn't clutter the view. */}
+      <LiveCursors channel={`cursors:${pathname}`} />
     </nav>
   );
 }
