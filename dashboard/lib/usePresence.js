@@ -13,13 +13,18 @@ export function usePresence(channelName = 'dashboard-presence') {
   const [users, setUsers] = useState([]);
 
   useEffect(() => {
+    console.log('[Presence] hook mounted, channel =', channelName);
     const supabase = createClient();
     let channel;
     let mounted = true;
 
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user || !mounted) return;
+      const { data: { user }, error } = await supabase.auth.getUser();
+      console.log('[Presence] getUser result:', { user_id: user?.id, email: user?.email, error });
+      if (!user || !mounted) {
+        console.log('[Presence] BAILING — no user or unmounted', { hasUser: !!user, mounted });
+        return;
+      }
 
       channel = supabase.channel(channelName, {
         config: { presence: { key: user.id } },
@@ -27,27 +32,30 @@ export function usePresence(channelName = 'dashboard-presence') {
 
       channel.on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState();
-        // presenceState() returns { [key]: Array<entry> } — multiple tabs from
-        // the same user show up as multiple entries under the same key, so we
-        // dedupe by user_id before surfacing to the UI.
+        console.log('[Presence] sync event, raw state:', state);
         const seen = new Map();
         for (const entry of Object.values(state).flat()) {
           if (!seen.has(entry.user_id)) seen.set(entry.user_id, entry);
         }
-        setUsers([...seen.values()]);
+        const list = [...seen.values()];
+        console.log('[Presence] deduped users:', list.length, list.map(u => u.name));
+        setUsers(list);
       });
 
       channel.subscribe(async (status) => {
+        console.log('[Presence] subscribe status:', status);
         if (status !== 'SUBSCRIBED') return;
-        await channel.track({
+        const trackResult = await channel.track({
           user_id: user.id,
           name: emailPrefix(user.email),
           email: user.email,
         });
+        console.log('[Presence] track result:', trackResult);
       });
     })();
 
     return () => {
+      console.log('[Presence] cleanup, unsubscribing');
       mounted = false;
       if (channel) channel.unsubscribe();
     };
