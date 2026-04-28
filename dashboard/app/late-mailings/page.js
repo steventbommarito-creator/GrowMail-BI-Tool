@@ -375,10 +375,14 @@ export default function LateMailingsPage() {
                 formatter={(v, n) => [fmt$(v), n]}
                 contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar dataKey="prepay" name="PrePay" stackId="rev" fill="var(--status-ok)" />
-              <Bar dataKey="net30"  name="NET30"  stackId="rev" fill="var(--accent)" />
-              <Bar dataKey="net45"  name="NET45"  stackId="rev" fill="#7c5cff" />
-              <Bar dataKey="other"  name="Other"  stackId="rev" fill="var(--text-muted)" radius={[3, 3, 0, 0]} />
+              {/* Explicit hex colors for the term categories so they don't
+                  collide with theme accent vars (which can both resolve to
+                  green and make PrePay + NET30 visually identical). These
+                  semantic colors stay stable across light/dark/mono themes. */}
+              <Bar dataKey="prepay" name="PrePay" stackId="rev" fill="#16a34a" />
+              <Bar dataKey="net30"  name="NET30"  stackId="rev" fill="#2563eb" />
+              <Bar dataKey="net45"  name="NET45"  stackId="rev" fill="#7c3aed" />
+              <Bar dataKey="other"  name="Other"  stackId="rev" fill="#94a3b8" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
