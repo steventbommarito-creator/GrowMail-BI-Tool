@@ -19,8 +19,14 @@ export function usePresence(channelName = 'dashboard-presence') {
     let mounted = true;
 
     (async () => {
-      const { data: { user }, error } = await supabase.auth.getUser();
-      console.log('[Presence] getUser result:', { user_id: user?.id, email: user?.email, error });
+      // Use getSession() not getUser() — getSession reads from local cookie/
+      // storage cache (instant, sync-ish) while getUser hits the network to
+      // validate the JWT (can take several seconds, blocking the channel
+      // subscribe). For presence we only need user.id + email; if the cached
+      // session is stale the Realtime subscribe will fail downstream.
+      const { data: { session }, error } = await supabase.auth.getSession();
+      const user = session?.user;
+      console.log('[Presence] getSession result:', { user_id: user?.id, email: user?.email, error });
       if (!user || !mounted) {
         console.log('[Presence] BAILING — no user or unmounted', { hasUser: !!user, mounted });
         return;
