@@ -23,17 +23,17 @@ export function useLiveCursors(channelName) {
 
   useEffect(() => {
     if (!channelName) return;
-    console.log('[Cursor] hook mounted, channel =', channelName);
     const supabase = createClient();
     let mounted = true;
 
     (async () => {
-      const { data: { user }, error } = await supabase.auth.getUser();
-      console.log('[Cursor] getUser result:', { user_id: user?.id, email: user?.email, error });
-      if (!user || !mounted) {
-        console.log('[Cursor] BAILING — no user or unmounted', { hasUser: !!user, mounted });
-        return;
-      }
+      // Use getSession() not getUser() — getSession reads from local cookie/
+      // storage cache (instant) while getUser hits the network to validate
+      // the JWT (can take several seconds, blocking the channel subscribe
+      // and dropping every mousemove until it finally resolves).
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
+      if (!user || !mounted) return;
 
       meRef.current = {
         user_id: user.id,
@@ -49,7 +49,6 @@ export function useLiveCursors(channelName) {
       channelRef.current = channel;
 
       channel.on('broadcast', { event: 'cursor' }, ({ payload }) => {
-        console.log('[Cursor] received broadcast from', payload?.name, payload?.user_id);
         setCursors(prev => ({
           ...prev,
           [payload.user_id]: { ...payload, lastSeen: Date.now() },
@@ -65,12 +64,9 @@ export function useLiveCursors(channelName) {
         });
       });
 
-      channel.subscribe((status) => {
-        console.log('[Cursor] subscribe status:', status);
-      });
+      channel.subscribe();
     })();
 
-    let sendCount = 0;
     function handleMove(e) {
       const now = Date.now();
       if (now - lastSentRef.current < BROADCAST_MS) return;
@@ -78,15 +74,8 @@ export function useLiveCursors(channelName) {
       if (document.hidden) return;
       const me = meRef.current;
       const ch = channelRef.current;
-      if (!me || !ch) {
-        if (sendCount === 0) console.log('[Cursor] mousemove fired but no channel/me yet', { hasMe: !!me, hasCh: !!ch });
-        return;
-      }
+      if (!me || !ch) return;
       lastSentRef.current = now;
-      sendCount++;
-      if (sendCount === 1 || sendCount % 50 === 0) {
-        console.log(`[Cursor] sent broadcast #${sendCount}`, { x: e.clientX, y: e.clientY });
-      }
       ch.send({
         type: 'broadcast',
         event: 'cursor',
