@@ -30,6 +30,7 @@ export default function Nav() {
   const pollRefs = useRef({});
 
   const links = [
+    { href: '/late-mailings', label: 'Late Mailings' },
     { href: '/overview', label: 'Overview' },
     { href: '/forecast', label: 'Forecast' },
     { href: '/cashflow', label: 'Cashflow' },
