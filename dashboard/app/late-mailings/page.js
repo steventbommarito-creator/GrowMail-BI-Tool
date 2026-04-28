@@ -227,6 +227,19 @@ export default function LateMailingsPage() {
     return rows;
   }, [lateDrops, sortKey, sortDir]);
 
+  // Running cumulative postage as you scan the table top-to-bottom in the
+  // current sort order. We use postageRequired (post-EPS-deduction), so the
+  // last row's runningTotal equals the "Postage to Catch Up" KPI exactly,
+  // and EPS-already-charged rows contribute $0 — matching the strikethrough
+  // convention. Recomputed whenever sortedRows changes (i.e. on re-sort).
+  const sortedRowsWithRunning = useMemo(() => {
+    let running = 0;
+    return sortedRows.map(d => {
+      running += d.postageRequired;
+      return { ...d, runningTotal: +running.toFixed(2) };
+    });
+  }, [sortedRows]);
+
   function toggleSort(key) {
     if (sortKey === key) {
       setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
@@ -237,7 +250,9 @@ export default function LateMailingsPage() {
   }
 
   function handleExport() {
-    const rows = sortedRows.map(d => ({
+    // Export uses the running-total view so the CSV reflects exactly what
+    // the user sees on screen, including the cumulative postage column.
+    const rows = sortedRowsWithRunning.map(d => ({
       'Days Late': d.daysLate,
       'Est Date': d.drop_est_date || '',
       'Customer': d.customer_name || '',
@@ -247,6 +262,7 @@ export default function LateMailingsPage() {
       'Quantity': d.mail_drop_quantity || 0,
       'Drop Amount': (d.mail_drop_amount || 0).toFixed(2),
       'Postage Required': d.postageRequired.toFixed(2),
+      'Running Total': d.runningTotal.toFixed(2),
       'EPS Charged': d.epsCharged ? 'Yes' : 'No',
       'Order Status': d.order_status || '',
       'Drop Status': d.drop_status || '',
@@ -377,7 +393,7 @@ export default function LateMailingsPage() {
             Late Drops ({sortedRows.length})
           </h2>
           <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            Click a column header to re-sort. Strikethrough postage = drop already charged to EPS.
+            Click a column header to re-sort. Running Total accumulates postage top-down in the current sort order. Strikethrough postage = drop already charged to EPS.
           </p>
         </div>
         <div className="overflow-x-auto">
@@ -404,17 +420,25 @@ export default function LateMailingsPage() {
                     </th>
                   );
                 })}
+                {/* Running Total is intentionally NOT sortable — its values are
+                    derived from the current sort order, so sorting by it
+                    would create a paradox. */}
+                <th className="px-3 py-2 font-medium text-right select-none"
+                  style={{ color: 'var(--text-secondary)' }}
+                  title="Cumulative postage top-down in the current sort order. Final row = total Postage to Catch Up.">
+                  Running Total
+                </th>
               </tr>
             </thead>
             <tbody>
-              {sortedRows.length === 0 && (
+              {sortedRowsWithRunning.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
+                  <td colSpan={9} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
                     No late drops. 🎉
                   </td>
                 </tr>
               )}
-              {sortedRows.map(d => (
+              {sortedRowsWithRunning.map(d => (
                 <tr key={d.mail_drop_id} style={{ borderTop: '1px solid var(--border)' }}>
                   <td className="px-3 py-1.5">
                     <span className="px-1.5 py-0.5 rounded text-[10px] font-medium"
@@ -447,6 +471,10 @@ export default function LateMailingsPage() {
                     }}
                     title={d.epsCharged ? 'Already charged to EPS — excluded from "Postage to Catch Up"' : ''}>
                     {fmt$(d.rawPostage)}
+                  </td>
+                  <td className="px-3 py-1.5 text-right"
+                    style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                    {fmt$(d.runningTotal)}
                   </td>
                 </tr>
               ))}
