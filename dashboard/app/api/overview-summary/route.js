@@ -27,7 +27,7 @@ export async function GET() {
     const [{ data: txns }, { data: drops }, { data: deposits }] = await Promise.all([
       supabase.from('usps_transactions').select('*').gte('transaction_date', since90).order('transaction_date', { ascending: true }),
       supabase.from('osprey_mail_drops')
-        .select('mail_drop_id, order_id, customer_name, product_category, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, mail_drop_quantity')
+        .select('mail_drop_id, order_id, customer_name, product_category, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, actual_postage, mail_method, mail_drop_quantity')
         .in('order_status', ['DAL [SUBMITTED]', 'DIGITAL READY', 'DIGITAL [STAGING]', 'OUTSOURCED', 'OUTSOURCED [STAGING]'])
         .eq('is_live_status', true)
         .lte('drop_est_date', in14d),

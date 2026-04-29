@@ -1,24 +1,23 @@
-// Shared postage math. Used by cashflow/forecast/overview pages and the
-// overview-summary API route so the LDP rate and postage rules stay in one place.
+// Shared postage math. Used by cashflow / forecast / late-mailings / overview
+// pages and the overview-summary API route so postage logic stays in one place.
+//
+// Osprey now provides BOTH an estimated postage (the forecast) and an actual
+// postage (computed once production has priced the drop) on every row of the
+// Gordon & Lance finance report. We prefer the actual when it's been posted
+// and fall back to the estimate otherwise — no more client-side per-piece
+// rate math, which was historically only accurate for LDP Postcards anyway.
 
-// USPS Marketing Mail postcard rate applied to LDP Postcard product category
-// when the drop has cleared the DAL gate and is in production/outsourced.
-// Update this when USPS changes the rate.
-export const LDP_POSTCARD_RATE = 0.244;
-
-// Compute the dollar postage that should be charged against the EPS balance for
-// a single mail drop. For LDP Postcards this is computed from the piece count;
-// for everything else it's whatever Osprey reports in postage_amount.
+// Compute the dollar postage that should be charged against the EPS balance
+// for a single mail drop.
+//   - actual_postage  → real cost from Osprey production. Use it whenever > 0.
+//   - postage_amount  → estimated postage (the "Est. Postage" CSV column).
+//                       Used as the forecast value before production has priced.
 //
 // Note: this does NOT know about EPS-already-deducted drops. Callers should
 // check their own `epsDeductedMap` / `epsSet` and treat matched drops as $0
-// in the running-balance forecast (to avoid double-counting charges that have
-// already hit the EPS account).
+// in the running-balance forecast (to avoid double-counting charges that
+// have already hit the EPS account).
 export function effectivePostage(d) {
-  if ((d.product_category || '').toLowerCase().includes('ldp postcard')) {
-    const orderOk = (d.order_status || '').toUpperCase() === 'DAL [SUBMITTED]';
-    const dropOk  = ['OUTSOURCED', 'PRODUCTION'].includes((d.drop_status || '').toUpperCase());
-    return (orderOk && dropOk) ? (d.mail_drop_quantity || 0) * LDP_POSTCARD_RATE : 0;
-  }
-  return d.postage_amount || 0;
+  if (d?.actual_postage && d.actual_postage > 0) return d.actual_postage;
+  return d?.postage_amount || 0;
 }

@@ -176,7 +176,7 @@ export default function ForecastPage() {
 
     const [{ data: dropData }, { data: txns }, { data: projData }] = await Promise.all([
       supabase.from('osprey_mail_drops')
-        .select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, postage_amount, mail_drop_quantity, mail_drop_amount, order_amount, payment_amount_applied')
+        .select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, postage_amount, actual_postage, mail_method, mail_drop_quantity, mail_drop_amount, order_amount, payment_amount_applied')
         .in('order_status', FORECAST_STATUSES)
         .gte('drop_est_date', today)           // ← from today (KPI includes current week)
         .lte('drop_est_date', in12w),
