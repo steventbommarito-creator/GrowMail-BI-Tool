@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '../../../lib/supabaseServer';
-import { effectivePostage } from '../../../lib/postage';
+import { effectivePostage, isLdpMailMethod } from '../../../lib/postage';
 import OpenAI from 'openai';
 import { createHash } from 'crypto';
 
@@ -34,10 +34,11 @@ export async function GET() {
       supabase.from('projected_deposits').select('*').eq('is_active', true).lte('deposit_date', in14d).order('deposit_date'),
     ]);
 
-    // Deduplicate drops by mail_drop_id — keep last record
+    // Deduplicate drops by mail_drop_id — keep last record. Then drop anything
+    // with mail_method = "LDP" — those are handled by LDP and don't hit our EPS.
     const seenDrops = new Map();
     for (const d of (drops || [])) seenDrops.set(d.mail_drop_id, d);
-    const dedupedDrops = [...seenDrops.values()];
+    const dedupedDrops = [...seenDrops.values()].filter(d => !isLdpMailMethod(d));
 
     // Build EPS-deducted set: drop IDs already charged to EPS should not be subtracted again
     const epsSet = new Set(

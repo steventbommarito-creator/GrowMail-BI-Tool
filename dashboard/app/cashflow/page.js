@@ -8,7 +8,7 @@ import {
   ComposedChart, Line,
 } from 'recharts';
 import { exportToCSV, exportToPDF } from '../../lib/export';
-import { effectivePostage } from '../../lib/postage';
+import { effectivePostage, isEstimatedPostage, isLdpMailMethod } from '../../lib/postage';
 
 const fmt$ = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtK = (n) => n == null ? '—' : '$' + (Math.abs(n) / 1000).toFixed(1) + 'k';
@@ -113,8 +113,12 @@ export default function CashflowPage() {
       }
     }
 
+    // Drop anything with mail_method = "LDP" — those are handled by LDP and
+    // don't hit our EPS, so they shouldn't appear anywhere in cashflow views.
+    const dropsWithoutLdp = [...seenDrops.values()].filter(d => !isLdpMailMethod(d));
+
     setTransactions(txns || []);
-    setDrops([...seenDrops.values()]);
+    setDrops(dropsWithoutLdp);
     setProjectedDeposits(projData || []);
     setCustomerTerms(termsMap);
     setEpsDeductedMap(epsMap);
@@ -754,7 +758,7 @@ export default function CashflowPage() {
                                       {d.drop_est_date || '—'}
                                     </td>
                                   )}
-                                  <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)', textDecoration: d._epsTransactionNumber ? 'line-through' : 'none', opacity: d._epsTransactionNumber ? 0.45 : 1 }}>{fmt$(d._effectivePostage ?? d.postage_amount)}</td>
+                                  <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)', textDecoration: d._epsTransactionNumber ? 'line-through' : 'none', opacity: d._epsTransactionNumber ? 0.45 : 1 }}>{fmt$(d._effectivePostage ?? d.postage_amount)}{isEstimatedPostage(d) && (d._effectivePostage ?? d.postage_amount) > 0 && <span className="ml-1 text-[10px]" style={{ color: 'var(--text-muted)', fontWeight: 'normal' }}>(est)</span>}</td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_quantity?.toLocaleString() || '—'}</td>
                                   <td className="px-3 py-1.5" style={{ whiteSpace: 'nowrap' }}>
                                     {d._pastDue && <span className="font-medium mr-1" style={{ color: 'var(--status-warn)' }}>PAST DUE</span>}
@@ -981,7 +985,7 @@ export default function CashflowPage() {
                                               {ET(d.drop_est_date) || '—'}
                                             </td>
                                           )}
-                                          <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)', textDecoration: d._epsTransactionNumber ? 'line-through' : 'none', opacity: d._epsTransactionNumber ? 0.45 : 1 }}>{fmt$(d._effectivePostage ?? d.postage_amount)}</td>
+                                          <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)', textDecoration: d._epsTransactionNumber ? 'line-through' : 'none', opacity: d._epsTransactionNumber ? 0.45 : 1 }}>{fmt$(d._effectivePostage ?? d.postage_amount)}{isEstimatedPostage(d) && (d._effectivePostage ?? d.postage_amount) > 0 && <span className="ml-1 text-[10px]" style={{ color: 'var(--text-muted)', fontWeight: 'normal' }}>(est)</span>}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_quantity?.toLocaleString() || '—'}</td>
                                           <td className="px-3 py-1.5" style={{ whiteSpace: 'nowrap' }}>
                                             {d._pastDue && <span className="font-medium mr-1" style={{ color: 'var(--status-warn)' }}>PAST DUE</span>}
@@ -1369,7 +1373,10 @@ export default function CashflowPage() {
                         <td className="py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                         <td className="py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
                         <td className="text-right py-1.5" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_quantity?.toLocaleString() || '—'}</td>
-                        <td className="text-right py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(d._postage)}</td>
+                        <td className="text-right py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>
+                          {fmt$(d._postage)}
+                          {isEstimatedPostage(d) && d._postage > 0 && <span className="ml-1 text-[10px]" style={{ color: 'var(--text-muted)', fontWeight: 'normal' }}>(est)</span>}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1408,6 +1415,7 @@ export default function CashflowPage() {
                                 style={{ color: matched ? 'var(--text-muted)' : 'var(--text-primary)',
                                          textDecoration: matched ? 'line-through' : 'none' }}>
                                 {fmt$(effectivePostage(d))}
+                                {isEstimatedPostage(d) && effectivePostage(d) > 0 && <span className="ml-1 text-[10px]" style={{ color: 'var(--text-muted)', fontWeight: 'normal' }}>(est)</span>}
                               </td>
                               <td className="py-1.5 pl-2 text-[10px]" style={{ color: matched ? 'var(--status-ok)' : 'var(--text-muted)' }}>
                                 {matched ? `✓ #${epsDeductedMap[d.mail_drop_id]}` : '—'}

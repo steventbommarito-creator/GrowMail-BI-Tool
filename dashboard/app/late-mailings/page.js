@@ -23,7 +23,7 @@ import {
   Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import { exportToCSV } from '../../lib/export';
-import { effectivePostage } from '../../lib/postage';
+import { effectivePostage, isEstimatedPostage, isLdpMailMethod } from '../../lib/postage';
 
 const fmt$ = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtK = (n) => n == null ? '—' : '$' + (Math.abs(n) / 1000).toFixed(1) + 'k';
@@ -107,9 +107,11 @@ export default function LateMailingsPage() {
     ]);
 
     // Defensive dedupe by mail_drop_id (keep last row from sync results).
+    // Then drop anything with mail_method = "LDP" — those are handled by LDP
+    // and don't hit our EPS, so they shouldn't appear in our backlog views.
     const seen = new Map();
     for (const d of (dropData || [])) seen.set(d.mail_drop_id, d);
-    const deduped = [...seen.values()];
+    const deduped = [...seen.values()].filter(d => !isLdpMailMethod(d));
 
     // Pull terms only for the customers actually present in the late set —
     // avoids the 1k row default cap on the full table.
@@ -144,13 +146,16 @@ export default function LateMailingsPage() {
   useEffect(() => { load(); }, [load]);
 
   // Enrich each late drop with the fields the rest of the page needs:
-  // billVia, daysLate, postageRequired (post EPS-deduction), epsCharged.
+  // billVia, daysLate, postageRequired (post EPS-deduction), epsCharged,
+  // isEst (whether the postage figure is from estimate vs. actual — used
+  // to render the (est) suffix on row-level displays).
   const lateDrops = useMemo(() => {
     return drops.map(d => {
       const billVia = classifyTerm(customerTerms[d.customer_id]);
       const epsCharged = !!epsDeductedMap[d.mail_drop_id];
       const rawPostage = effectivePostage(d);
       const postageRequired = epsCharged ? 0 : rawPostage;
+      const isEst = isEstimatedPostage(d);
       const daysLate = d.drop_est_date
         ? Math.floor((new Date(today + 'T12:00:00') - new Date(d.drop_est_date + 'T12:00:00')) / 86400000)
         : 0;
@@ -159,6 +164,7 @@ export default function LateMailingsPage() {
         billVia,
         epsCharged,
         rawPostage,
+        isEst,
         postageRequired,
         daysLate,
       };
@@ -258,10 +264,12 @@ export default function LateMailingsPage() {
       'Customer': d.customer_name || '',
       'Customer ID': d.customer_id || '',
       'Product': d.product_category || '',
+      'Mail Method': d.mail_method || '',
       'Bill Via': d.billVia,
       'Quantity': d.mail_drop_quantity || 0,
       'Drop Amount': (d.mail_drop_amount || 0).toFixed(2),
       'Postage Required': d.postageRequired.toFixed(2),
+      'Postage Source': d.isEst ? 'estimated' : 'actual',
       'Running Total': d.runningTotal.toFixed(2),
       'EPS Charged': d.epsCharged ? 'Yes' : 'No',
       'Order Status': d.order_status || '',
@@ -397,7 +405,7 @@ export default function LateMailingsPage() {
             Late Drops ({sortedRows.length})
           </h2>
           <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            Click a column header to re-sort. Running Total accumulates postage top-down in the current sort order. Strikethrough postage = drop already charged to EPS.
+            Click a column header to re-sort. Running Total accumulates postage top-down in the current sort order. Strikethrough postage = drop already charged to EPS. (est) = estimate from Osprey, actual not yet posted.
           </p>
         </div>
         <div className="overflow-x-auto">
@@ -473,8 +481,11 @@ export default function LateMailingsPage() {
                       color: d.epsCharged ? 'var(--text-muted)' : 'var(--text-primary)',
                       textDecoration: d.epsCharged ? 'line-through' : 'none',
                     }}
-                    title={d.epsCharged ? 'Already charged to EPS — excluded from "Postage to Catch Up"' : ''}>
+                    title={d.epsCharged ? 'Already charged to EPS — excluded from "Postage to Catch Up"' : (d.isEst ? 'Estimated postage — Osprey hasn\'t posted the actual yet' : '')}>
                     {fmt$(d.rawPostage)}
+                    {d.isEst && d.rawPostage > 0 && (
+                      <span className="ml-1 text-[10px]" style={{ color: 'var(--text-muted)', fontWeight: 'normal' }}>(est)</span>
+                    )}
                   </td>
                   <td className="px-3 py-1.5 text-right"
                     style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>

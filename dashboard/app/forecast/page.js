@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { createClient } from '../../lib/supabase';
-import { effectivePostage } from '../../lib/postage';
+import { effectivePostage, isLdpMailMethod } from '../../lib/postage';
 import {
   AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -188,11 +188,14 @@ export default function ForecastPage() {
         .select('*').eq('is_active', true).gte('deposit_date', nextWeekStart).order('deposit_date'),
     ]);
 
-    // Deduplicate drops by mail_drop_id — keep last record (most recent sync state)
+    // Deduplicate drops by mail_drop_id — keep last record (most recent sync state).
+    // Then drop anything with mail_method = "LDP" — those are handled by LDP and
+    // don't hit our EPS, so they shouldn't show in pipeline/postage forecasts.
     const seenDrops = new Map();
     for (const d of (dropData || [])) seenDrops.set(d.mail_drop_id, d);
+    const dropsWithoutLdp = [...seenDrops.values()].filter(d => !isLdpMailMethod(d));
 
-    setDrops([...seenDrops.values()]);
+    setDrops(dropsWithoutLdp);
     setTransactions(txns || []);
     setProjectedDeposits(projData || []);
     setLoading(false);
