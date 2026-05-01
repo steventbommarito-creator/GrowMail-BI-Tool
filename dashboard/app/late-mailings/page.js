@@ -24,6 +24,7 @@ import {
 } from 'recharts';
 import { exportToCSV } from '../../lib/export';
 import { effectivePostage, isEstimatedPostage, isLdpMailMethod } from '../../lib/postage';
+import { OspreyOrderLink, OspreyDropLink } from '../../lib/ospreyLinks';
 
 const fmt$ = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtK = (n) => n == null ? '—' : '$' + (Math.abs(n) / 1000).toFixed(1) + 'k';
@@ -463,8 +464,12 @@ export default function LateMailingsPage() {
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{ET(d.drop_est_date)}</td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
-                  <td className="px-3 py-1.5 font-mono" style={{ color: 'var(--text-muted)' }}>{d.order_id || '—'}</td>
-                  <td className="px-3 py-1.5 font-mono" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_id || '—'}</td>
+                  <td className="px-3 py-1.5 font-mono" style={{ color: 'var(--text-muted)' }}>
+                    <OspreyOrderLink id={d.order_id} />
+                  </td>
+                  <td className="px-3 py-1.5 font-mono" style={{ color: 'var(--text-muted)' }}>
+                    <OspreyDropLink id={d.mail_drop_id} />
+                  </td>
                   <td className="px-3 py-1.5">
                     <span className="px-1.5 py-0.5 rounded text-[10px]"
                       style={{

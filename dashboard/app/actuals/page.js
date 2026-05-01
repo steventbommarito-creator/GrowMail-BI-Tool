@@ -16,6 +16,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { createClient } from '../../lib/supabase';
 import { isLdpMailMethod } from '../../lib/postage';
+import { OspreyOrderLink, OspreyDropLink } from '../../lib/ospreyLinks';
 
 const fmt = (n) =>
   n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -387,8 +388,12 @@ export default function ActualsPage() {
                   >
                     <td className="px-3 py-2 text-gray-800">{r.customer || '—'}</td>
                     <td className="px-3 py-2 text-gray-600">{r.product || '—'}</td>
-                    <td className="px-3 py-2 text-gray-500 font-mono text-xs whitespace-nowrap">{r.order_id || '—'}</td>
-                    <td className="px-3 py-2 text-gray-500 font-mono text-xs whitespace-nowrap">{r.mail_drop_id || '—'}</td>
+                    <td className="px-3 py-2 text-gray-500 font-mono text-xs whitespace-nowrap">
+                      <OspreyOrderLink id={r.order_id} />
+                    </td>
+                    <td className="px-3 py-2 text-gray-500 font-mono text-xs whitespace-nowrap">
+                      <OspreyDropLink id={r.mail_drop_id} />
+                    </td>
                     <td className="px-3 py-2 text-gray-600">{r.mail_method || '—'}</td>
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{r.drop_status || '—'}</td>
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
