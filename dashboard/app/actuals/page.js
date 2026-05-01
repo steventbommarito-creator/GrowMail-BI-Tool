@@ -1,42 +1,68 @@
 'use client';
 
+// Postage Actuals — three-way reconciliation per drop:
+//   - Est Postage    = osprey_mail_drops.postage_amount    (forecast at order time)
+//   - Actual Postage = osprey_mail_drops.actual_postage    (Osprey production-priced cost)
+//   - EPS Postage    = SUM(usps_transactions.amount) matched by mail_drop_id
+//                      (real money out the door)
+//
+// Variance       = Actual − EPS  (does Osprey's calculated cost match the real USPS charge?)
+// Postage Profit = Est    − EPS  (forecast vs reality — what we charged the customer minus what we paid USPS)
+//
+// Date window defaults to the last 30 days through 15 days into the future.
+// Filter operates on drop_act_date when present, falling back to drop_est_date,
+// so this view spans recent actuals + near-future scheduled drops in one frame.
+
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { createClient } from '../../lib/supabase';
+import { isLdpMailMethod } from '../../lib/postage';
 
 const fmt = (n) =>
   n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtPct = (n) => (n == null ? '—' : (Number(n) * 100).toFixed(1) + '%');
 
-const FULFILLMENT_PATHS = ['All', 'Kaleidoscope > Kaleidoscope', 'Unspecified > Unspecified'];
-const CATEGORIES = ['All', 'EDDM', 'LDP', 'Saturation', 'DM Postcard', 'New Mover Postcard'];
+function addDays(dateStr, n) {
+  const d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split('T')[0];
+}
+
+const TODAY = () => new Date().toISOString().split('T')[0];
 
 export default function ActualsPage() {
   const supabase = createClient();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [sortCol, setSortCol] = useState('drop_act_date');
+  const [sortCol, setSortCol] = useState('drop_date');
   const [sortDir, setSortDir] = useState('desc');
   const [filterPath, setFilterPath] = useState('All');
   const [filterCat, setFilterCat] = useState('All');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  // Default window: last 30 days through 15 days into the future, evaluated
+  // against drop_act_date (or drop_est_date when no act has happened yet).
+  const [dateFrom, setDateFrom] = useState(addDays(TODAY(), -30));
+  const [dateTo,   setDateTo]   = useState(addDays(TODAY(),  15));
 
   const load = useCallback(async () => {
     setLoading(true);
-    const since90 = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
-      .toISOString()
-      .split('T')[0];
+    const today = TODAY();
+    const fetchFrom = addDays(today, -30);
+    const fetchTo   = addDays(today,  15);
 
-    // Get Osprey drops with actuals (where drop has occurred)
+    // We want every drop whose effective date (act if present, else est) falls
+    // in the window. Postgrest can't express COALESCE in a filter, so we OR
+    // two conditions:
+    //   1) drop_act_date in [fetchFrom, fetchTo]              ← past drops with an actual
+    //   2) drop_act_date IS NULL AND drop_est_date in window  ← unmailed (future or stalled) drops
     const { data: drops } = await supabase
       .from('osprey_mail_drops')
       .select(
-        'customer_name, product_category, drop_act_date, drop_est_date, fulfillment_path, postage_amount, mail_drop_id, order_id'
+        'mail_drop_id, order_id, customer_name, product_category, mail_method, fulfillment_path, drop_act_date, drop_est_date, postage_amount, actual_postage, mail_drop_quantity'
       )
-      .not('drop_act_date', 'is', null)
-      .gte('drop_act_date', since90)
-      .order('drop_act_date', { ascending: false })
-      .limit(500);
+      .or(
+        `and(drop_act_date.gte.${fetchFrom},drop_act_date.lte.${fetchTo}),` +
+        `and(drop_act_date.is.null,drop_est_date.gte.${fetchFrom},drop_est_date.lte.${fetchTo})`
+      )
+      .limit(1000);
 
     if (!drops?.length) {
       setRows([]);
@@ -44,35 +70,61 @@ export default function ActualsPage() {
       return;
     }
 
-    // Get matching USPS transactions by osprey_mail_drop_id
-    const dropIds = [...new Set(drops.map((d) => d.mail_drop_id).filter(Boolean))];
-    let uspsMap = {};
+    // Dedupe by mail_drop_id (defensive — one row per drop) and drop LDP-method
+    // drops, which are handled and paid for by LDP rather than us.
+    const seen = new Map();
+    for (const d of drops) seen.set(d.mail_drop_id, d);
+    const cleaned = [...seen.values()].filter(d => !isLdpMailMethod(d));
+
+    // Sum EPS transactions by mail_drop_id for the drops we kept.
+    const dropIds = cleaned.map(d => d.mail_drop_id).filter(Boolean);
+    const epsMap = {};
     if (dropIds.length) {
       const { data: usps } = await supabase
         .from('usps_transactions')
         .select('osprey_mail_drop_id, amount')
         .in('osprey_mail_drop_id', dropIds);
-
-      for (const u of usps || []) {
+      for (const u of (usps || [])) {
         const id = u.osprey_mail_drop_id;
-        uspsMap[id] = (uspsMap[id] || 0) + Math.abs(u.amount || 0);
+        epsMap[id] = (epsMap[id] || 0) + Math.abs(u.amount || 0);
       }
     }
 
-    const combined = drops.map((d) => {
-      const quoted = d.postage_amount || 0;
-      const actual = uspsMap[d.mail_drop_id] || null;
-      const varDollar = actual != null ? actual - quoted : null;
-      const varPct = actual != null && quoted ? (actual - quoted) / quoted : null;
+    const combined = cleaned.map(d => {
+      const estPostage    = d.postage_amount || 0;
+      const actualPostage = d.actual_postage || 0;
+      const epsPostage    = epsMap[d.mail_drop_id] || null;
+
+      // Variance: how close did Osprey's actual price track USPS reality?
+      // Null until both sides exist.
+      const variance    = (epsPostage != null && actualPostage)
+        ? actualPostage - epsPostage
+        : null;
+      const variancePct = (epsPostage != null && actualPostage)
+        ? (actualPostage - epsPostage) / actualPostage
+        : null;
+
+      // Postage profit: customer's est postage minus what we actually paid
+      // USPS. Positive = profit, negative = loss. Null until EPS is charged.
+      const postageProfit = (epsPostage != null && estPostage)
+        ? estPostage - epsPostage
+        : null;
+
       return {
+        mail_drop_id: d.mail_drop_id,
+        order_id: d.order_id,
         customer: d.customer_name,
         product: d.product_category,
+        mail_method: d.mail_method,
         drop_date: d.drop_act_date || d.drop_est_date,
+        is_acted: !!d.drop_act_date,
         fulfillment_path: d.fulfillment_path,
-        quoted,
-        actual,
-        var_dollar: varDollar,
-        var_pct: varPct,
+        estPostage,
+        actualPostage,
+        epsPostage,
+        variance,
+        variancePct,
+        postageProfit,
       };
     });
 
@@ -105,23 +157,40 @@ export default function ActualsPage() {
     }
   }
 
+  // Roll-up totals across the visible (filtered) rows.
+  const totals = useMemo(() => {
+    return filtered.reduce((acc, r) => ({
+      est:    acc.est    + (r.estPostage    || 0),
+      actual: acc.actual + (r.actualPostage || 0),
+      eps:    acc.eps    + (r.epsPostage    || 0),
+      profit: acc.profit + (r.postageProfit || 0),
+    }), { est: 0, actual: 0, eps: 0, profit: 0 });
+  }, [filtered]);
+
   const cols = [
-    { key: 'customer', label: 'Customer' },
-    { key: 'product', label: 'Product' },
-    { key: 'drop_date', label: 'Drop Date' },
+    { key: 'customer',         label: 'Customer' },
+    { key: 'product',          label: 'Product' },
+    { key: 'mail_method',      label: 'Mail Method' },
+    { key: 'drop_date',        label: 'Drop Date' },
     { key: 'fulfillment_path', label: 'Fulfillment Path' },
-    { key: 'quoted', label: 'Quoted Postage' },
-    { key: 'actual', label: 'Actual Postage' },
-    { key: 'var_dollar', label: 'Variance $' },
-    { key: 'var_pct', label: 'Variance %' },
+    { key: 'estPostage',       label: 'Est Postage',    align: 'right' },
+    { key: 'actualPostage',    label: 'Actual Postage', align: 'right' },
+    { key: 'epsPostage',       label: 'EPS Postage',    align: 'right' },
+    { key: 'variance',         label: 'Variance $',     align: 'right' },
+    { key: 'variancePct',      label: 'Variance %',     align: 'right' },
+    { key: 'postageProfit',    label: 'Postage Profit', align: 'right' },
   ];
 
   const paths = ['All', ...new Set(rows.map((r) => r.fulfillment_path).filter(Boolean))];
-  const cats = ['All', ...new Set(rows.map((r) => r.product).filter(Boolean))];
+  const cats  = ['All', ...new Set(rows.map((r) => r.product).filter(Boolean))];
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-gray-900">Actuals vs Quoted</h1>
+      <h1 className="text-2xl font-bold text-gray-900">Postage Actuals</h1>
+      <p className="text-xs text-gray-500">
+        Est (Osprey forecast) → Actual (Osprey production-priced) → EPS (real USPS charge). Variance compares Actual vs EPS.
+        Postage Profit = Est − EPS. Default window is last 30 days through next 15 days; rows with an actual drop date use that, otherwise est date.
+      </p>
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
@@ -154,6 +223,28 @@ export default function ActualsPage() {
         </div>
       </div>
 
+      {/* Roll-up tiles */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+          <p className="text-xs text-gray-500 mb-0.5">Est Postage</p>
+          <p className="text-lg font-bold text-gray-900">{fmt(totals.est)}</p>
+        </div>
+        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+          <p className="text-xs text-gray-500 mb-0.5">Actual Postage</p>
+          <p className="text-lg font-bold text-gray-900">{fmt(totals.actual)}</p>
+        </div>
+        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+          <p className="text-xs text-gray-500 mb-0.5">EPS Postage</p>
+          <p className="text-lg font-bold text-gray-900">{fmt(totals.eps)}</p>
+        </div>
+        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+          <p className="text-xs text-gray-500 mb-0.5">Postage Profit (Est − EPS)</p>
+          <p className={`text-lg font-bold ${totals.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            {fmt(totals.profit)}
+          </p>
+        </div>
+      </div>
+
       {/* Table */}
       {loading ? (
         <p className="text-gray-500">Loading...</p>
@@ -166,7 +257,7 @@ export default function ActualsPage() {
                   <th
                     key={c.key}
                     onClick={() => toggleSort(c.key)}
-                    className="px-3 py-2 text-left text-xs font-semibold text-gray-600 cursor-pointer whitespace-nowrap select-none"
+                    className={`px-3 py-2 text-xs font-semibold text-gray-600 cursor-pointer whitespace-nowrap select-none ${c.align === 'right' ? 'text-right' : 'text-left'}`}
                   >
                     {c.label}
                     {sortCol === c.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
@@ -176,30 +267,42 @@ export default function ActualsPage() {
             </thead>
             <tbody>
               {filtered.map((r, i) => {
-                const highVariance = r.var_pct != null && Math.abs(r.var_pct) > 0.05;
+                // Highlight rows where Actual diverges meaningfully from EPS — that's
+                // the "Osprey said one thing, USPS charged another" signal.
+                const highVariance = r.variancePct != null && Math.abs(r.variancePct) > 0.05;
                 return (
                   <tr
-                    key={i}
+                    key={r.mail_drop_id || i}
                     className={`border-b border-gray-50 ${highVariance ? 'bg-red-50' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}
                   >
                     <td className="px-3 py-2 text-gray-800">{r.customer || '—'}</td>
                     <td className="px-3 py-2 text-gray-600">{r.product || '—'}</td>
-                    <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{r.drop_date || '—'}</td>
+                    <td className="px-3 py-2 text-gray-600">{r.mail_method || '—'}</td>
+                    <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
+                      {r.drop_date || '—'}
+                      {!r.is_acted && r.drop_date && (
+                        <span className="ml-1 text-[10px] text-gray-400">(est)</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-gray-600">{r.fulfillment_path || '—'}</td>
-                    <td className="px-3 py-2 text-right">{fmt(r.quoted)}</td>
-                    <td className="px-3 py-2 text-right">{fmt(r.actual)}</td>
-                    <td className={`px-3 py-2 text-right font-medium ${r.var_dollar > 0 ? 'text-red-600' : r.var_dollar < 0 ? 'text-green-600' : 'text-gray-600'}`}>
-                      {fmt(r.var_dollar)}
+                    <td className="px-3 py-2 text-right">{fmt(r.estPostage)}</td>
+                    <td className="px-3 py-2 text-right">{r.actualPostage > 0 ? fmt(r.actualPostage) : '—'}</td>
+                    <td className="px-3 py-2 text-right">{fmt(r.epsPostage)}</td>
+                    <td className={`px-3 py-2 text-right font-medium ${r.variance > 0 ? 'text-red-600' : r.variance < 0 ? 'text-green-600' : 'text-gray-600'}`}>
+                      {fmt(r.variance)}
                     </td>
                     <td className={`px-3 py-2 text-right font-medium ${highVariance ? 'text-red-700' : 'text-gray-600'}`}>
-                      {fmtPct(r.var_pct)}
+                      {fmtPct(r.variancePct)}
+                    </td>
+                    <td className={`px-3 py-2 text-right font-medium ${r.postageProfit > 0 ? 'text-green-600' : r.postageProfit < 0 ? 'text-red-600' : 'text-gray-600'}`}>
+                      {fmt(r.postageProfit)}
                     </td>
                   </tr>
                 );
               })}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-gray-400">No data</td>
+                  <td colSpan={cols.length} className="px-3 py-6 text-center text-gray-400">No data</td>
                 </tr>
               )}
             </tbody>
