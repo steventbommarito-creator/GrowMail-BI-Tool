@@ -4,6 +4,7 @@
 //
 // Run with: node backfillUSPSDropIds.js
 
+require('dotenv').config();
 const supabase = require('./lib/supabase');
 
 function parseDropId(detail) {
