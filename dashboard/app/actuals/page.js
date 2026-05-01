@@ -238,6 +238,8 @@ export default function ActualsPage() {
   const cols = [
     { key: 'customer',         label: 'Customer' },
     { key: 'product',          label: 'Product' },
+    { key: 'order_id',         label: 'Order ID' },
+    { key: 'mail_drop_id',     label: 'Drop ID' },
     { key: 'mail_method',      label: 'Mail Method' },
     { key: 'drop_status',      label: 'Drop Status' },
     { key: 'drop_date',        label: 'Drop Date' },
@@ -385,6 +387,8 @@ export default function ActualsPage() {
                   >
                     <td className="px-3 py-2 text-gray-800">{r.customer || '—'}</td>
                     <td className="px-3 py-2 text-gray-600">{r.product || '—'}</td>
+                    <td className="px-3 py-2 text-gray-500 font-mono text-xs whitespace-nowrap">{r.order_id || '—'}</td>
+                    <td className="px-3 py-2 text-gray-500 font-mono text-xs whitespace-nowrap">{r.mail_drop_id || '—'}</td>
                     <td className="px-3 py-2 text-gray-600">{r.mail_method || '—'}</td>
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{r.drop_status || '—'}</td>
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
