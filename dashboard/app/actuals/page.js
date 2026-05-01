@@ -41,6 +41,10 @@ export default function ActualsPage() {
   // against drop_act_date (or drop_est_date when no act has happened yet).
   const [dateFrom, setDateFrom] = useState(addDays(TODAY(), -30));
   const [dateTo,   setDateTo]   = useState(addDays(TODAY(),  15));
+  // Multi-select drop_status filter. null = all statuses pass through (default
+  // before rows load). Once rows load we seed the Set with every status seen
+  // so all pills start active; clicking a pill toggles its membership.
+  const [selectedStatuses, setSelectedStatuses] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,7 +60,7 @@ export default function ActualsPage() {
     const { data: drops } = await supabase
       .from('osprey_mail_drops')
       .select(
-        'mail_drop_id, order_id, customer_name, product_category, mail_method, fulfillment_path, drop_act_date, drop_est_date, postage_amount, actual_postage, mail_drop_quantity'
+        'mail_drop_id, order_id, customer_name, product_category, mail_method, drop_status, fulfillment_path, drop_act_date, drop_est_date, postage_amount, actual_postage, mail_drop_quantity'
       )
       .or(
         `and(drop_act_date.gte.${fetchFrom},drop_act_date.lte.${fetchTo}),` +
@@ -116,6 +120,7 @@ export default function ActualsPage() {
         customer: d.customer_name,
         product: d.product_category,
         mail_method: d.mail_method,
+        drop_status: d.drop_status,
         drop_date: d.drop_act_date || d.drop_est_date,
         is_acted: !!d.drop_act_date,
         fulfillment_path: d.fulfillment_path,
@@ -134,19 +139,48 @@ export default function ActualsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // List of distinct drop_status values present in the loaded rows. Sorted so
+  // the pills render in stable order across re-fetches.
+  const allStatuses = useMemo(() =>
+    [...new Set(rows.map(r => r.drop_status).filter(Boolean))].sort(),
+    [rows]
+  );
+
+  // Once rows arrive for the first time, seed the selection to "all" so every
+  // pill starts active. We only seed once — if the user clears or narrows the
+  // selection later, refetches won't reset it back to "all".
+  useEffect(() => {
+    if (selectedStatuses === null && allStatuses.length > 0) {
+      setSelectedStatuses(new Set(allStatuses));
+    }
+  }, [allStatuses, selectedStatuses]);
+
+  function toggleStatus(s) {
+    setSelectedStatuses(prev => {
+      const base = prev ?? new Set(allStatuses);
+      const next = new Set(base);
+      if (next.has(s)) next.delete(s); else next.add(s);
+      return next;
+    });
+  }
+
   const filtered = useMemo(() => {
     return rows
       .filter((r) => filterPath === 'All' || r.fulfillment_path === filterPath)
       .filter((r) => filterCat === 'All' || r.product === filterCat)
       .filter((r) => !dateFrom || r.drop_date >= dateFrom)
       .filter((r) => !dateTo || r.drop_date <= dateTo)
+      // Status multi-select: null means "show all", otherwise only rows whose
+      // drop_status is in the selected Set. Rows with no drop_status only
+      // appear when no status filter is in effect.
+      .filter((r) => !selectedStatuses || (r.drop_status && selectedStatuses.has(r.drop_status)))
       .sort((a, b) => {
         const av = a[sortCol] ?? '';
         const bv = b[sortCol] ?? '';
         const cmp = av < bv ? -1 : av > bv ? 1 : 0;
         return sortDir === 'asc' ? cmp : -cmp;
       });
-  }, [rows, filterPath, filterCat, dateFrom, dateTo, sortCol, sortDir]);
+  }, [rows, filterPath, filterCat, dateFrom, dateTo, selectedStatuses, sortCol, sortDir]);
 
   function toggleSort(col) {
     if (sortCol === col) {
@@ -171,6 +205,7 @@ export default function ActualsPage() {
     { key: 'customer',         label: 'Customer' },
     { key: 'product',          label: 'Product' },
     { key: 'mail_method',      label: 'Mail Method' },
+    { key: 'drop_status',      label: 'Drop Status' },
     { key: 'drop_date',        label: 'Drop Date' },
     { key: 'fulfillment_path', label: 'Fulfillment Path' },
     { key: 'estPostage',       label: 'Est Postage',    align: 'right' },
@@ -222,6 +257,43 @@ export default function ActualsPage() {
           <span className="text-xs text-gray-500">{filtered.length} rows</span>
         </div>
       </div>
+
+      {/* Drop Status multi-select — toggleable pills, one per distinct status
+          present in the loaded rows. Clicking a pill flips its membership;
+          All / None reset the selection in bulk. */}
+      {allStatuses.length > 0 && (
+        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+          <div className="flex items-center flex-wrap gap-2">
+            <span className="text-xs text-gray-500 mr-1">Drop Status:</span>
+            <button
+              onClick={() => setSelectedStatuses(new Set(allStatuses))}
+              className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50">
+              All
+            </button>
+            <button
+              onClick={() => setSelectedStatuses(new Set())}
+              className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50">
+              None
+            </button>
+            <span className="w-px h-4 bg-gray-200 mx-1" />
+            {allStatuses.map(s => {
+              const active = !selectedStatuses || selectedStatuses.has(s);
+              return (
+                <button
+                  key={s}
+                  onClick={() => toggleStatus(s)}
+                  className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                    active
+                      ? 'border-blue-500 bg-blue-50 text-blue-700'
+                      : 'border-gray-300 bg-white text-gray-400'
+                  }`}>
+                  {s}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Roll-up tiles */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -278,6 +350,7 @@ export default function ActualsPage() {
                     <td className="px-3 py-2 text-gray-800">{r.customer || '—'}</td>
                     <td className="px-3 py-2 text-gray-600">{r.product || '—'}</td>
                     <td className="px-3 py-2 text-gray-600">{r.mail_method || '—'}</td>
+                    <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{r.drop_status || '—'}</td>
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
                       {r.drop_date || '—'}
                       {!r.is_acted && r.drop_date && (
