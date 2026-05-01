@@ -28,7 +28,10 @@ async function main() {
 
   const updates = [];
   for (const row of data) {
-    if (!row.is_dmm) continue;
+    // Don't gate on is_dmm — PURCHASE-type rows like "402278_GM_271239" also
+    // encode a drop id that the actuals + cashflow pages need to match on.
+    // parseDropId returns null on detail strings without trailing digits, so
+    // deposits and fee rows stay correctly unmatched.
     const dropId = parseDropId(row.job_id);
     if (!dropId) continue;
     updates.push({ transaction_number: row.transaction_number, osprey_mail_drop_id: dropId });
