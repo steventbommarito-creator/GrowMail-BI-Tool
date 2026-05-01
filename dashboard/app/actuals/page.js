@@ -29,6 +29,23 @@ function addDays(dateStr, n) {
 
 const TODAY = () => new Date().toISOString().split('T')[0];
 
+// Osprey emits drop_status with inconsistent casing — "COMPLETE" / "complete" /
+// "Complete" all appear in the same dataset. Normalize to title case so they
+// merge into one pill / one comparable value. Returns null when the input is
+// blank.
+function normalizeStatus(s) {
+  if (!s) return null;
+  return String(s)
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// Statuses we default the filter to on first load — drops that have actually
+// completed (with or without an outstanding payment-required marker). The
+// user can manually toggle other statuses on after the page renders.
+const DEFAULT_STATUSES = ['Complete', 'Complete Pymt Req'];
+
 export default function ActualsPage() {
   const supabase = createClient();
   const [rows, setRows] = useState([]);
@@ -37,10 +54,12 @@ export default function ActualsPage() {
   const [sortDir, setSortDir] = useState('desc');
   const [filterPath, setFilterPath] = useState('All');
   const [filterCat, setFilterCat] = useState('All');
-  // Default window: last 30 days through 15 days into the future, evaluated
-  // against drop_act_date (or drop_est_date when no act has happened yet).
+  // Default window: last 30 days through today, evaluated against
+  // drop_act_date (or drop_est_date when no act has happened yet). The user
+  // can manually extend the To date out into the future and the load will
+  // refetch — see the load callback's deps below.
   const [dateFrom, setDateFrom] = useState(addDays(TODAY(), -30));
-  const [dateTo,   setDateTo]   = useState(addDays(TODAY(),  15));
+  const [dateTo,   setDateTo]   = useState(TODAY());
   // Multi-select drop_status filter. null = all statuses pass through (default
   // before rows load). Once rows load we seed the Set with every status seen
   // so all pills start active; clicking a pill toggles its membership.
@@ -48,9 +67,9 @@ export default function ActualsPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const today = TODAY();
-    const fetchFrom = addDays(today, -30);
-    const fetchTo   = addDays(today,  15);
+    const fetchFrom = dateFrom;
+    const fetchTo   = dateTo;
+    if (!fetchFrom || !fetchTo) { setLoading(false); return; }
 
     // We want every drop whose effective date (act if present, else est) falls
     // in the window. Postgrest can't express COALESCE in a filter, so we OR
@@ -120,7 +139,7 @@ export default function ActualsPage() {
         customer: d.customer_name,
         product: d.product_category,
         mail_method: d.mail_method,
-        drop_status: d.drop_status,
+        drop_status: normalizeStatus(d.drop_status),
         drop_date: d.drop_act_date || d.drop_est_date,
         is_acted: !!d.drop_act_date,
         fulfillment_path: d.fulfillment_path,
@@ -135,7 +154,7 @@ export default function ActualsPage() {
 
     setRows(combined);
     setLoading(false);
-  }, []);
+  }, [dateFrom, dateTo]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -146,12 +165,15 @@ export default function ActualsPage() {
     [rows]
   );
 
-  // Once rows arrive for the first time, seed the selection to "all" so every
-  // pill starts active. We only seed once — if the user clears or narrows the
-  // selection later, refetches won't reset it back to "all".
+  // Once rows arrive for the first time, seed the selection to the default
+  // "completed" statuses (Complete, Complete Pymt Req) if any are present.
+  // Falls back to "all selected" if neither default exists in the data so the
+  // user doesn't see an empty table on first load. We only seed once — manual
+  // changes survive subsequent refetches.
   useEffect(() => {
     if (selectedStatuses === null && allStatuses.length > 0) {
-      setSelectedStatuses(new Set(allStatuses));
+      const matching = DEFAULT_STATUSES.filter(s => allStatuses.includes(s));
+      setSelectedStatuses(new Set(matching.length > 0 ? matching : allStatuses));
     }
   }, [allStatuses, selectedStatuses]);
 
@@ -224,8 +246,32 @@ export default function ActualsPage() {
       <h1 className="text-2xl font-bold text-gray-900">Postage Actuals</h1>
       <p className="text-xs text-gray-500">
         Est (Osprey forecast) → Actual (Osprey production-priced) → EPS (real USPS charge). Variance compares Actual vs EPS.
-        Postage Profit = Est − EPS. Default window is last 30 days through next 15 days; rows with an actual drop date use that, otherwise est date.
+        Postage Profit = Est − EPS. Default window is the last 30 days, scoped to drops marked Complete or Complete Pymt Req — adjust filters below to widen.
       </p>
+
+      {/* Roll-up tiles — moved to the top so the headline numbers are the
+          first thing you see when the page loads. They reflect the active
+          filters, so as you toggle pills below, these update in lockstep. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+          <p className="text-xs text-gray-500 mb-0.5">Est Postage</p>
+          <p className="text-lg font-bold text-gray-900">{fmt(totals.est)}</p>
+        </div>
+        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+          <p className="text-xs text-gray-500 mb-0.5">Actual Postage</p>
+          <p className="text-lg font-bold text-gray-900">{fmt(totals.actual)}</p>
+        </div>
+        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+          <p className="text-xs text-gray-500 mb-0.5">EPS Postage</p>
+          <p className="text-lg font-bold text-gray-900">{fmt(totals.eps)}</p>
+        </div>
+        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+          <p className="text-xs text-gray-500 mb-0.5">Postage Profit (Est − EPS)</p>
+          <p className={`text-lg font-bold ${totals.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            {fmt(totals.profit)}
+          </p>
+        </div>
+      </div>
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
@@ -294,28 +340,6 @@ export default function ActualsPage() {
           </div>
         </div>
       )}
-
-      {/* Roll-up tiles */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
-          <p className="text-xs text-gray-500 mb-0.5">Est Postage</p>
-          <p className="text-lg font-bold text-gray-900">{fmt(totals.est)}</p>
-        </div>
-        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
-          <p className="text-xs text-gray-500 mb-0.5">Actual Postage</p>
-          <p className="text-lg font-bold text-gray-900">{fmt(totals.actual)}</p>
-        </div>
-        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
-          <p className="text-xs text-gray-500 mb-0.5">EPS Postage</p>
-          <p className="text-lg font-bold text-gray-900">{fmt(totals.eps)}</p>
-        </div>
-        <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
-          <p className="text-xs text-gray-500 mb-0.5">Postage Profit (Est − EPS)</p>
-          <p className={`text-lg font-bold ${totals.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-            {fmt(totals.profit)}
-          </p>
-        </div>
-      </div>
 
       {/* Table */}
       {loading ? (
