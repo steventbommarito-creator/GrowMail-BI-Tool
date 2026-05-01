@@ -93,11 +93,23 @@ export default function ActualsPage() {
       return;
     }
 
-    // Dedupe by mail_drop_id (defensive — one row per drop) and drop LDP-method
-    // drops, which are handled and paid for by LDP rather than us.
+    // Dedupe by mail_drop_id (defensive — one row per drop) plus three
+    // exclusions specific to this page:
+    //   1. mail_method = "LDP"           — handled and paid for by LDP, not us
+    //   2. product_category "New Mover"  — out of scope for this view
+    //   3. LDP product without actual    — drops where Osprey hasn't priced
+    //      the LDP postcard yet are noise on the actuals view; show them only
+    //      once production has posted a real actual_postage value.
     const seen = new Map();
     for (const d of drops) seen.set(d.mail_drop_id, d);
-    const cleaned = [...seen.values()].filter(d => !isLdpMailMethod(d));
+    const cleaned = [...seen.values()]
+      .filter(d => !isLdpMailMethod(d))
+      .filter(d => {
+        const cat = (d.product_category || '').toLowerCase();
+        if (cat.includes('new mover')) return false;
+        if (cat.includes('ldp') && !(d.actual_postage > 0)) return false;
+        return true;
+      });
 
     // Sum EPS transactions by mail_drop_id for the drops we kept.
     const dropIds = cleaned.map(d => d.mail_drop_id).filter(Boolean);
