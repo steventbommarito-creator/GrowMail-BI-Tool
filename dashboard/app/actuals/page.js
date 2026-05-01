@@ -378,13 +378,10 @@ export default function ActualsPage() {
             </thead>
             <tbody>
               {filtered.map((r, i) => {
-                // Highlight rows where Actual diverges meaningfully from EPS — that's
-                // the "Osprey said one thing, USPS charged another" signal.
-                const highVariance = r.variancePct != null && Math.abs(r.variancePct) > 0.05;
                 return (
                   <tr
                     key={r.mail_drop_id || i}
-                    className={`border-b border-gray-50 ${highVariance ? 'bg-red-50' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}
+                    className={`border-b border-gray-50 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}
                   >
                     <td className="px-3 py-2 text-gray-800">{r.customer || '—'}</td>
                     <td className="px-3 py-2 text-gray-600">{r.product || '—'}</td>
@@ -409,7 +406,7 @@ export default function ActualsPage() {
                     <td className={`px-3 py-2 text-right font-medium ${r.variance > 0 ? 'text-red-600' : r.variance < 0 ? 'text-green-600' : 'text-gray-600'}`}>
                       {fmt(r.variance)}
                     </td>
-                    <td className={`px-3 py-2 text-right font-medium ${highVariance ? 'text-red-700' : 'text-gray-600'}`}>
+                    <td className="px-3 py-2 text-right font-medium text-gray-600">
                       {fmtPct(r.variancePct)}
                     </td>
                     <td className={`px-3 py-2 text-right font-medium ${r.postageProfit > 0 ? 'text-green-600' : r.postageProfit < 0 ? 'text-red-600' : 'text-gray-600'}`}>
