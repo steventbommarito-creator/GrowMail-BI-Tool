@@ -417,6 +417,8 @@ export default function LateMailingsPage() {
                   { key: 'drop_est_date',      label: 'Est Date',   align: 'left' },
                   { key: 'customer_name',      label: 'Customer',   align: 'left' },
                   { key: 'product_category',   label: 'Product',    align: 'left' },
+                  { key: 'order_id',           label: 'Order ID',   align: 'left' },
+                  { key: 'mail_drop_id',       label: 'Drop ID',    align: 'left' },
                   { key: 'billVia',            label: 'Bill Via',   align: 'left' },
                   { key: 'mail_drop_quantity', label: 'Qty',        align: 'right' },
                   { key: 'mail_drop_amount',   label: 'Drop Amt',   align: 'right' },
@@ -445,7 +447,7 @@ export default function LateMailingsPage() {
             <tbody>
               {sortedRowsWithRunning.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
+                  <td colSpan={11} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
                     No late drops. 🎉
                   </td>
                 </tr>
@@ -461,6 +463,8 @@ export default function LateMailingsPage() {
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{ET(d.drop_est_date)}</td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
+                  <td className="px-3 py-1.5 font-mono" style={{ color: 'var(--text-muted)' }}>{d.order_id || '—'}</td>
+                  <td className="px-3 py-1.5 font-mono" style={{ color: 'var(--text-muted)' }}>{d.mail_drop_id || '—'}</td>
                   <td className="px-3 py-1.5">
                     <span className="px-1.5 py-0.5 rounded text-[10px]"
                       style={{
