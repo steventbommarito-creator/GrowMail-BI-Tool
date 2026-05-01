@@ -162,6 +162,7 @@ export default function ForecastPage() {
   const [drops, setDrops]                       = useState([]);
   const [transactions, setTransactions]         = useState([]);
   const [projectedDeposits, setProjectedDeposits] = useState([]);
+  const [projectedDebits,   setProjectedDebits]   = useState([]);
   const [loading, setLoading]                   = useState(true);
   const [chartMode, setChartMode]               = useState('product'); // 'order' | 'drop' | 'product'
   const [selectedProduct, setSelectedProduct]   = useState(null);
@@ -174,7 +175,7 @@ export default function ForecastPage() {
     const in12w   = addDays(today, 84);
     const since90 = addDays(today, -90);
 
-    const [{ data: dropData }, { data: txns }, { data: projData }] = await Promise.all([
+    const [{ data: dropData }, { data: txns }, { data: projData }, { data: debitData }] = await Promise.all([
       supabase.from('osprey_mail_drops')
         .select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, postage_amount, actual_postage, mail_method, mail_drop_quantity, mail_drop_amount, order_amount, payment_amount_applied')
         .in('order_status', FORECAST_STATUSES)
@@ -186,6 +187,8 @@ export default function ForecastPage() {
         .order('transaction_date', { ascending: false }),
       supabase.from('projected_deposits')
         .select('*').eq('is_active', true).gte('deposit_date', nextWeekStart).order('deposit_date'),
+      supabase.from('projected_debits')
+        .select('*').eq('is_active', true).gte('debit_date', today).order('debit_date'),
     ]);
 
     // Deduplicate drops by mail_drop_id — keep last record (most recent sync state).
@@ -198,6 +201,7 @@ export default function ForecastPage() {
     setDrops(dropsWithoutLdp);
     setTransactions(txns || []);
     setProjectedDeposits(projData || []);
+    setProjectedDebits(debitData || []);
     setLoading(false);
   }, [today, nextWeekStart]);
 
@@ -304,13 +308,16 @@ export default function ForecastPage() {
     const events = [
       ...weeklyBreakdown.map(w => ({ date: addDays(w.week, 3), amount: -w.total, type: 'postage' })),
       ...projectedDeposits.map(p => ({ date: p.deposit_date, amount: p.amount, type: 'deposit' })),
+      // Manual future debits — non-Osprey EPS outflows logged on /cashflow.
+      // Subtract on their date so the runway agrees with the cashflow page.
+      ...projectedDebits.map(d => ({ date: d.debit_date, amount: -(d.amount || 0), type: 'debit' })),
     ].sort((a, b) => a.date.localeCompare(b.date));
     for (const e of events) {
       balance += e.amount;
       data.push({ date: e.date, balance: +balance.toFixed(2), type: e.type });
     }
     return data;
-  }, [currentBalance, weeklyBreakdown, projectedDeposits, today]);
+  }, [currentBalance, weeklyBreakdown, projectedDeposits, projectedDebits, today]);
 
   // ── KPIs ──────────────────────────────────────────────────────────────────
   const totalPostage = useMemo(() => drops.reduce((s, d) => s + postage(d), 0), [drops, postage]);

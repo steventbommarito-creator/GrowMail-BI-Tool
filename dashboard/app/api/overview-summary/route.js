@@ -24,7 +24,7 @@ export async function GET() {
     const in14d   = addDays(today, 14);
     const since90 = addDays(today, -90);
 
-    const [{ data: txns }, { data: drops }, { data: deposits }] = await Promise.all([
+    const [{ data: txns }, { data: drops }, { data: deposits }, { data: debits }] = await Promise.all([
       supabase.from('usps_transactions').select('*').gte('transaction_date', since90).order('transaction_date', { ascending: true }),
       supabase.from('osprey_mail_drops')
         .select('mail_drop_id, order_id, customer_name, product_category, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, actual_postage, mail_method, mail_drop_quantity')
@@ -32,6 +32,7 @@ export async function GET() {
         .eq('is_live_status', true)
         .lte('drop_est_date', in14d),
       supabase.from('projected_deposits').select('*').eq('is_active', true).lte('deposit_date', in14d).order('deposit_date'),
+      supabase.from('projected_debits').select('*').eq('is_active', true).lte('debit_date', in14d).order('debit_date'),
     ]);
 
     // Deduplicate drops by mail_drop_id — keep last record. Then drop anything
@@ -85,6 +86,15 @@ export async function GET() {
       const date = p.deposit_date;
       ensure(date);
       dayMap[date].deposits += p.amount;
+    }
+
+    // Manual future debits — non-Osprey EPS outflows the user logged on
+    // /cashflow. They subtract from the running balance like postage does.
+    for (const dbt of (debits || [])) {
+      const date = dbt.debit_date;
+      if (!date) continue;
+      ensure(date);
+      dayMap[date].postage += dbt.amount || 0;
     }
 
     const dayData = [];
@@ -148,7 +158,9 @@ export async function GET() {
       dayData: dayData.slice(0, 14),
     };
 
-    // Hash the key data points — if unchanged, return cached summary
+    // Hash the key data points — if unchanged, return cached summary.
+    // Including projected debits in the hash so adding/removing them
+    // invalidates the cached AI summary.
     const dataHash = createHash('sha256').update(JSON.stringify({
       today,
       currentBalance,
@@ -156,6 +168,7 @@ export async function GET() {
       pastDuePostage: +pastDuePostage.toFixed(2),
       dayData: dayData.map(d => ({ date: d.date, postage: d.postage, deposits: d.deposits })),
       deposits: (deposits || []).map(d => ({ date: d.deposit_date, amount: d.amount })),
+      debits:   (debits   || []).map(d => ({ date: d.debit_date,   amount: d.amount, note: d.note })),
     })).digest('hex');
 
     // Check cache

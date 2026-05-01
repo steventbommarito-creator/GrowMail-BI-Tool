@@ -51,6 +51,50 @@ function getWeekStart(dateStr) {
   return ws.toISOString().split('T')[0];
 }
 
+// Custom tooltip for the EPS Balance Runway chart. Recharts' default tooltip
+// only knows about the bar/line dataKeys it was rendered with, so it can't
+// break a single Postage bar into Osprey vs. manual-debit components. This
+// reaches into payload[0].payload (the original data row) for the breakout.
+function RunwayTooltip({ active, payload }) {
+  if (!active || !payload || !payload.length) return null;
+  const d = payload[0].payload || {};
+  const balance       = payload.find(p => p.dataKey === 'balance')?.value;
+  const deposits      = payload.find(p => p.dataKey === 'deposits')?.value || 0;
+  const postageTotal  = payload.find(p => p.dataKey === 'postage')?.value  || 0;
+  const ospreyPostage = d.ospreyPostage || 0;
+  const manualDebits  = d.manualDebits  || 0;
+  return (
+    <div style={{
+      background: 'var(--surface)',
+      border: '1px solid var(--border)',
+      borderRadius: 6,
+      padding: '8px 10px',
+      color: 'var(--text-primary)',
+      fontSize: 12,
+      minWidth: 180,
+    }}>
+      <p style={{ margin: 0, fontWeight: 600, marginBottom: 4 }}>{d.label}</p>
+      {balance != null && (
+        <p style={{ margin: '2px 0', color: 'var(--accent)' }}>Balance: {fmt$(balance)}</p>
+      )}
+      {deposits > 0 && (
+        <p style={{ margin: '2px 0', color: 'var(--status-ok)' }}>Deposits: +{fmt$(Math.abs(deposits))}</p>
+      )}
+      {postageTotal < 0 && (
+        <>
+          <p style={{ margin: '2px 0', color: 'var(--status-critical)' }}>Outflow: −{fmt$(Math.abs(postageTotal))}</p>
+          {manualDebits < 0 && (
+            <div style={{ marginLeft: 10, fontSize: 11, color: 'var(--text-muted)' }}>
+              {ospreyPostage < 0 && <p style={{ margin: 0 }}>Osprey postage: −{fmt$(Math.abs(ospreyPostage))}</p>}
+              <p style={{ margin: 0 }}>Other debits: −{fmt$(Math.abs(manualDebits))}</p>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function CashflowPage() {
   const supabase = createClient();
   const [transactions, setTransactions] = useState([]);
@@ -63,6 +107,9 @@ export default function CashflowPage() {
   const [expandedDays, setExpandedDays] = useState({});
   const [showAddDeposit, setShowAddDeposit] = useState(false);
   const [newDeposit, setNewDeposit] = useState({ date: '', amount: '', note: '' });
+  const [showAddDebit, setShowAddDebit] = useState(false);
+  const [newDebit, setNewDebit] = useState({ date: '', amount: '', note: '' });
+  const [projectedDebits, setProjectedDebits] = useState([]);  // non-Osprey EPS outflows the user logs manually
   const [userEmail, setUserEmail] = useState('');
   const [customerTerms, setCustomerTerms] = useState({}); // customer_id → term_label
   const [expandedBillingRows, setExpandedBillingRows] = useState({});
@@ -80,10 +127,11 @@ export default function CashflowPage() {
     const in8w = addDays(new Date().toISOString().split('T')[0], 56);
     const today = new Date().toISOString().split('T')[0];
 
-    const [{ data: txns }, { data: dropData }, { data: projData }] = await Promise.all([
+    const [{ data: txns }, { data: dropData }, { data: projData }, { data: debitData }] = await Promise.all([
       supabase.from('usps_transactions').select('*').gte('transaction_date', since90).order('transaction_date', { ascending: true }),
       supabase.from('osprey_mail_drops').select('mail_drop_id, order_id, customer_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, actual_postage, mail_method, mail_drop_amount, production_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id').in('order_status', ['DAL [SUBMITTED]', 'DIGITAL READY', 'DIGITAL [STAGING]', 'OUTSOURCED', 'OUTSOURCED [STAGING]']).eq('is_live_status', true).lte('drop_est_date', in8w),
       supabase.from('projected_deposits').select('*').eq('is_active', true).order('deposit_date'),
+      supabase.from('projected_debits').select('*').eq('is_active', true).order('debit_date'),
     ]);
 
     // Deduplicate drops by mail_drop_id — keep last record (most recent sync state)
@@ -120,6 +168,7 @@ export default function CashflowPage() {
     setTransactions(txns || []);
     setDrops(dropsWithoutLdp);
     setProjectedDeposits(projData || []);
+    setProjectedDebits(debitData || []);
     setCustomerTerms(termsMap);
     setEpsDeductedMap(epsMap);
     setLoading(false);
@@ -146,56 +195,79 @@ export default function CashflowPage() {
     drops.filter(d => d.is_live_status && d.drop_est_date < today && !d.drop_act_date),
     [drops, today]);
 
-  // Running EPS balance by day — used to highlight the day balance runs out
+  // Running EPS balance by day — used to highlight the day balance runs out.
+  // Tracks ospreyPostage and manualDebits separately so the chart tooltip can
+  // break down the red bar; the chart bar itself shows the combined outflow.
   const dayBalances = useMemo(() => {
     const dayMap = {};
+    const ensure = (date) => {
+      if (!dayMap[date]) dayMap[date] = { ospreyPostage: 0, manualDebits: 0, deposits: 0 };
+    };
 
     // Past-due drops → today (skip if already charged to EPS)
     for (const d of pastDueDrops) {
-      if (!dayMap[today]) dayMap[today] = { postage: 0, deposits: 0 };
-      dayMap[today].postage += epsDeductedMap[d.mail_drop_id] ? 0 : effectivePostage(d);
+      ensure(today);
+      dayMap[today].ospreyPostage += epsDeductedMap[d.mail_drop_id] ? 0 : effectivePostage(d);
     }
 
     // Future drops by est date (skip if already charged to EPS)
     for (const d of drops) {
       if (!d.is_live_status || d.drop_act_date || d.drop_est_date < today) continue;
       const date = d.drop_est_date;
-      if (!dayMap[date]) dayMap[date] = { postage: 0, deposits: 0 };
-      dayMap[date].postage += epsDeductedMap[d.mail_drop_id] ? 0 : effectivePostage(d);
+      ensure(date);
+      dayMap[date].ospreyPostage += epsDeductedMap[d.mail_drop_id] ? 0 : effectivePostage(d);
     }
 
     // Projected deposits
     for (const p of projectedDeposits) {
-      const date = p.deposit_date;
-      if (!dayMap[date]) dayMap[date] = { postage: 0, deposits: 0 };
-      dayMap[date].deposits += p.amount;
+      ensure(p.deposit_date);
+      dayMap[p.deposit_date].deposits += p.amount;
     }
 
-    // Compute running balance in chronological order
+    // Manual future debits — non-Osprey EPS outflows the user logged.
+    for (const dbt of projectedDebits) {
+      ensure(dbt.debit_date);
+      dayMap[dbt.debit_date].manualDebits += dbt.amount;
+    }
+
+    // Compute running balance in chronological order. postage in the result is
+    // the combined outflow (Osprey + manual debits) — chart bars and the
+    // running-balance math both use this number; tooltips break it back out.
     const sorted = Object.keys(dayMap).sort();
     let balance = currentBalance;
     const result = {};
     for (const date of sorted) {
-      balance += dayMap[date].deposits - dayMap[date].postage;
+      const totalOutflow = dayMap[date].ospreyPostage + dayMap[date].manualDebits;
+      balance += dayMap[date].deposits - totalOutflow;
       result[date] = {
         runningBalance: +balance.toFixed(2),
         isGap: balance < 0,
-        postage: +dayMap[date].postage.toFixed(2),
-        deposits: +dayMap[date].deposits.toFixed(2),
+        postage:        +totalOutflow.toFixed(2),                    // combined for chart bar / running balance
+        ospreyPostage:  +dayMap[date].ospreyPostage.toFixed(2),     // Osprey only — tooltip
+        manualDebits:   +dayMap[date].manualDebits.toFixed(2),      // debits only — tooltip
+        deposits:       +dayMap[date].deposits.toFixed(2),
       };
     }
     return result;
-  }, [drops, pastDueDrops, projectedDeposits, currentBalance, today, epsDeductedMap]);
+  }, [drops, pastDueDrops, projectedDeposits, projectedDebits, currentBalance, today, epsDeductedMap]);
 
-  // Weekly postage needs (8 weeks forward + past-due rolled into current week)
+  // Weekly postage needs (8 weeks forward + past-due rolled into current week).
+  // Each week now also carries manualDebits (sum) + debitItems (raw rows) so
+  // the accounting table can show an "Other Debits" column with note tooltip.
   const weeklyNeeds = useMemo(() => {
     const weeks = {};
     const currentWeekStart = getWeekStart(today);
+    const ensureWeek = (w) => {
+      if (!weeks[w]) weeks[w] = {
+        week: w, postage: 0, drops: [], pastDue: 0,
+        manualDebits: 0, debitItems: [],
+      };
+    };
 
     // Past-due drops → current week
     for (const d of pastDueDrops) {
       const w = currentWeekStart;
-      if (!weeks[w]) weeks[w] = { week: w, postage: 0, drops: [], pastDue: 0 };
+      ensureWeek(w);
       const rawPostage = effectivePostage(d);
       const p = epsDeductedMap[d.mail_drop_id] ? 0 : rawPostage; // skip if already charged to EPS
       weeks[w].postage += p;
@@ -207,15 +279,24 @@ export default function CashflowPage() {
     for (const d of drops) {
       if (!d.drop_est_date || d.drop_act_date || (d.drop_est_date < today && d.is_live_status)) continue;
       const w = getWeekStart(d.drop_est_date);
-      if (!weeks[w]) weeks[w] = { week: w, postage: 0, drops: [], pastDue: 0 };
+      ensureWeek(w);
       const rawPostage = effectivePostage(d);
       const p = epsDeductedMap[d.mail_drop_id] ? 0 : rawPostage; // skip if already charged to EPS
       weeks[w].postage += p;
       weeks[w].drops.push({ ...d, _effectivePostage: rawPostage, _epsTransactionNumber: epsDeductedMap[d.mail_drop_id] || null });
     }
 
+    // Manual future debits — bucket into the week of debit_date
+    for (const dbt of projectedDebits) {
+      if (!dbt.debit_date) continue;
+      const w = getWeekStart(dbt.debit_date);
+      ensureWeek(w);
+      weeks[w].manualDebits += dbt.amount || 0;
+      weeks[w].debitItems.push(dbt);
+    }
+
     return Object.values(weeks).sort((a, b) => a.week.localeCompare(b.week)).slice(0, 8);
-  }, [drops, today, pastDueDrops, epsDeductedMap]);
+  }, [drops, today, pastDueDrops, epsDeductedMap, projectedDebits]);
 
   // EPS balance runway chart — day-by-day for 14 days
   // Day-mode: 14 rolling days. Each point carries post-event balance plus the
@@ -234,14 +315,18 @@ export default function CashflowPage() {
         label: new Date(date + 'T12:00:00').toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }),
         balance: +balance.toFixed(2),
         deposits: +(entry?.deposits || 0).toFixed(2),
-        postage:  -(+(entry?.postage  || 0).toFixed(2)),  // negative so it renders below axis
+        postage:  -(+(entry?.postage  || 0).toFixed(2)),                  // combined for bar
+        ospreyPostage: -(+(entry?.ospreyPostage || 0).toFixed(2)),        // tooltip breakout
+        manualDebits:  -(+(entry?.manualDebits  || 0).toFixed(2)),        // tooltip breakout
       });
     }
     return data;
   }, [currentBalance, dayBalances, today]);
 
-  // Week-mode: 8 rolling weeks. We reuse weeklyNeeds for postage and sum
-  // projectedDeposits per week. Running balance walks forward one week at a time.
+  // Week-mode: 8 rolling weeks. We reuse weeklyNeeds for postage + manual
+  // debits, sum projectedDeposits per week, and walk the running balance
+  // forward one week at a time. The chart's red bar shows combined outflow
+  // (Osprey postage + manual debits); the tooltip breaks them out.
   const weeklyTimeline = useMemo(() => {
     const data = [];
     let balance = currentBalance;
@@ -249,13 +334,16 @@ export default function CashflowPage() {
       const weekDeposits = projectedDeposits
         .filter(p => getWeekStart(p.deposit_date) === w.week)
         .reduce((s, p) => s + (p.amount || 0), 0);
-      balance += weekDeposits - w.postage;
+      const totalOutflow = w.postage + (w.manualDebits || 0);
+      balance += weekDeposits - totalOutflow;
       data.push({
         key: w.week,
         label: weekLabel(w.week),
         balance: +balance.toFixed(2),
         deposits: +weekDeposits.toFixed(2),
-        postage:  -(+w.postage.toFixed(2)),
+        postage:  -(+totalOutflow.toFixed(2)),                     // combined for bar
+        ospreyPostage: -(+w.postage.toFixed(2)),                   // tooltip breakout
+        manualDebits:  -(+(w.manualDebits || 0).toFixed(2)),       // tooltip breakout
       });
     }
     return data;
@@ -289,7 +377,12 @@ export default function CashflowPage() {
       const projDeposit = projectedDeposits
         .filter(p => getWeekStart(p.deposit_date) === w.week)
         .reduce((s, p) => s + (p.amount || 0), 0);
-      running += projDeposit - w.postage;
+
+      // Manual future debits (non-Osprey EPS outflows) — also subtract from
+      // running balance and surface as the "Other Debits" column.
+      const otherDebits     = w.manualDebits || 0;
+      const otherDebitItems = w.debitItems || [];
+      running += projDeposit - w.postage - otherDebits;
 
       return {
         week: weekLabel(w.week),
@@ -301,6 +394,8 @@ export default function CashflowPage() {
         expectedInvoice,
         totalExpected: expectedStripe + expectedInvoice,
         projDeposit,
+        otherDebits,
+        otherDebitItems,
         dropCount: w.drops.length,
         drops: w.drops,
         runningBalance: running,
@@ -332,10 +427,13 @@ export default function CashflowPage() {
       const { drops: dayDrops, isLateMail } = dayMap[date];
       const postage = dayDrops.reduce((s, d) => s + (d._epsTransactionNumber ? 0 : (d._effectivePostage || 0)), 0);
       const deposit = projectedDeposits.filter(p => p.deposit_date === date).reduce((s, p) => s + p.amount, 0);
+      // Manual future debits landing on this exact day
+      const dayDebits     = projectedDebits.filter(dbt => dbt.debit_date === date);
+      const otherDebits   = dayDebits.reduce((s, dbt) => s + (dbt.amount || 0), 0);
       const bal = dayBalances[date];
-      return { date, drops: dayDrops, postage, deposit, isLateMail, runningBalance: bal?.runningBalance, isGap: bal?.isGap };
+      return { date, drops: dayDrops, postage, deposit, otherDebits, otherDebitItems: dayDebits, isLateMail, runningBalance: bal?.runningBalance, isGap: bal?.isGap };
     });
-  }, [weeklyNeeds, pastDueDrops, projectedDeposits, dayBalances, today, epsDeductedMap]);
+  }, [weeklyNeeds, pastDueDrops, projectedDeposits, projectedDebits, dayBalances, today, epsDeductedMap]);
 
   // Payment terms by day — all live drops grouped by date, split by term_label
   const paymentTermsRows = useMemo(() => {
@@ -470,6 +568,52 @@ export default function CashflowPage() {
     load();
   }
 
+  // Projected debits — non-Osprey EPS outflows (custom postage runs, special
+  // bulk jobs, etc.) that the user logs manually so the balance forecast
+  // captures them. Symmetric with addProjectedDeposit / deleteDeposit above.
+  async function addProjectedDebit() {
+    if (!newDebit.date || !newDebit.amount) return;
+    const { error } = await supabase.from('projected_debits').upsert({
+      debit_date: newDebit.date,
+      amount: parseFloat(newDebit.amount),
+      note: newDebit.note || null,
+      created_by: userEmail,
+      is_active: true,
+    }, { onConflict: 'debit_date' });
+
+    if (!error) {
+      await supabase.from('projected_debit_audit').insert({
+        action: 'create',
+        new_amount: parseFloat(newDebit.amount),
+        new_date: newDebit.date,
+        changed_by: userEmail,
+        note: newDebit.note || null,
+      });
+      await supabase.from('notifications').insert({
+        event_type: 'debit_projected',
+        title: `Projected debit added: ${newDebit.date}`,
+        body: `$${parseFloat(newDebit.amount).toLocaleString()} by ${userEmail}${newDebit.note ? ' — ' + newDebit.note : ''}`,
+        severity: 'info', source: 'cashflow',
+        data_json: { date: newDebit.date, amount: parseFloat(newDebit.amount), note: newDebit.note || null },
+      });
+      setNewDebit({ date: '', amount: '', note: '' });
+      setShowAddDebit(false);
+      load();
+    }
+  }
+
+  async function deleteDebit(id, date, amount) {
+    await supabase.from('projected_debits').update({ is_active: false }).eq('id', id);
+    await supabase.from('projected_debit_audit').insert({
+      projected_debit_id: id,
+      action: 'delete',
+      previous_amount: amount,
+      previous_date: date,
+      changed_by: userEmail,
+    });
+    load();
+  }
+
   if (loading) return <p style={{ color: 'var(--text-muted)' }} className="p-4">Loading...</p>;
 
   const exportAccountingCSV = () => {
@@ -477,6 +621,7 @@ export default function CashflowPage() {
       'Week': r.week,
       'Postage Due': r.postageDue.toFixed(2),
       'Past-Due Rolled': r.pastDue.toFixed(2),
+      'Other Debits': (r.otherDebits || 0).toFixed(2),
       'Expected Stripe': r.expectedStripe.toFixed(2),
       'Expected Invoice': r.expectedInvoice.toFixed(2),
       'Total Expected': r.totalExpected.toFixed(2),
@@ -489,10 +634,15 @@ export default function CashflowPage() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>Cashflow & EPS</h1>
         <div className="flex gap-2">
-          <button onClick={() => setShowAddDeposit(v => !v)}
+          <button onClick={() => { setShowAddDeposit(v => !v); setShowAddDebit(false); }}
             className="text-sm px-3 py-1.5 rounded font-medium"
             style={{ background: 'var(--accent)', color: 'var(--accent-text)', border: 'none' }}>
             + Add Projected Deposit
+          </button>
+          <button onClick={() => { setShowAddDebit(v => !v); setShowAddDeposit(false); }}
+            className="text-sm px-3 py-1.5 rounded font-medium"
+            style={{ background: 'var(--status-critical)', color: 'white', border: 'none' }}>
+            + Add Future Debit
           </button>
           <button onClick={exportAccountingCSV}
             className="text-sm px-3 py-1.5 rounded"
@@ -534,6 +684,50 @@ export default function CashflowPage() {
                 Save
               </button>
               <button onClick={() => setShowAddDeposit(false)}
+                className="text-sm px-3 py-1.5 rounded"
+                style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Future Debit Form — symmetric with the deposit form, red accent */}
+      {showAddDebit && (
+        <div className="rounded-xl p-4 border" style={{ background: 'var(--surface)', borderColor: 'var(--status-critical)' }}>
+          <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>Add Future Debit</h3>
+          <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+            Use for non-core EPS outflows that aren&apos;t tied to an Osprey drop (custom postage runs, special bulk jobs, etc.). Subtracted from the running-balance forecast on the date entered.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <div>
+              <label className="text-xs block mb-1" style={{ color: 'var(--text-muted)' }}>Date</label>
+              <input type="date" value={newDebit.date} onChange={e => setNewDebit(d => ({ ...d, date: e.target.value }))}
+                className="border rounded px-2 py-1 text-sm"
+                style={{ background: 'var(--surface2)', color: 'var(--text-primary)', borderColor: 'var(--border)' }} />
+            </div>
+            <div>
+              <label className="text-xs block mb-1" style={{ color: 'var(--text-muted)' }}>Amount ($)</label>
+              <input type="number" value={newDebit.amount} onChange={e => setNewDebit(d => ({ ...d, amount: e.target.value }))}
+                placeholder="2500"
+                className="border rounded px-2 py-1 text-sm w-32"
+                style={{ background: 'var(--surface2)', color: 'var(--text-primary)', borderColor: 'var(--border)' }} />
+            </div>
+            <div>
+              <label className="text-xs block mb-1" style={{ color: 'var(--text-muted)' }}>Note (recommended)</label>
+              <input type="text" value={newDebit.note} onChange={e => setNewDebit(d => ({ ...d, note: e.target.value }))}
+                placeholder="e.g. Custom bulk postage for project X"
+                className="border rounded px-2 py-1 text-sm w-72"
+                style={{ background: 'var(--surface2)', color: 'var(--text-primary)', borderColor: 'var(--border)' }} />
+            </div>
+            <div className="flex items-end gap-2">
+              <button onClick={addProjectedDebit}
+                className="text-sm px-3 py-1.5 rounded font-medium"
+                style={{ background: 'var(--status-critical)', color: 'white' }}>
+                Save
+              </button>
+              <button onClick={() => setShowAddDebit(false)}
                 className="text-sm px-3 py-1.5 rounded"
                 style={{ background: 'var(--surface2)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
                 Cancel
@@ -604,38 +798,54 @@ export default function CashflowPage() {
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
             <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
             <YAxis tickFormatter={fmtK} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
-            <Tooltip
-              formatter={(v, name) => [fmt$(Math.abs(v)), name]}
-              contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+            <Tooltip content={<RunwayTooltip />} />
             <ReferenceLine y={0} stroke="var(--text-muted)" />
             <Bar dataKey="deposits" name="Deposits" fill="var(--status-ok)" radius={[2, 2, 0, 0]} />
-            <Bar dataKey="postage"  name="Postage"  fill="var(--status-critical)" radius={[0, 0, 2, 2]} />
+            <Bar dataKey="postage"  name="Outflow"  fill="var(--status-critical)" radius={[0, 0, 2, 2]} />
             <Line type="monotone" dataKey="balance" name="Balance" stroke="var(--accent)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
 
-      {/* Projected Deposits List */}
-      {projectedDeposits.length > 0 && (
+      {/* Projected Cashflow List — deposits (green +) + manual debits (red −),
+          merged and sorted by date so you see the chronological in/out picture
+          in one place. Each row stays deletable via its own handler. */}
+      {(projectedDeposits.length > 0 || projectedDebits.length > 0) && (
         <div className="rounded-xl p-4 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-          <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>Projected Deposits</h2>
+          <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>Projected Cashflow</h2>
           <div className="space-y-2">
-            {projectedDeposits.map(p => (
-              <div key={p.id} className="flex items-center justify-between text-sm py-2 border-b"
-                style={{ borderColor: 'var(--border)' }}>
-                <div>
-                  <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{ET(p.deposit_date)}</span>
-                  <span className="ml-3" style={{ color: 'var(--status-ok)' }}>{fmt$(p.amount)}</span>
-                  {p.note && <span className="ml-3 text-xs" style={{ color: 'var(--text-muted)' }}>{p.note}</span>}
-                  {p.created_by && <span className="ml-3 text-xs" style={{ color: 'var(--text-muted)' }}>by {p.created_by}</span>}
+            {[
+              ...projectedDeposits.map(p => ({ kind: 'deposit', id: p.id, date: p.deposit_date, amount: p.amount, note: p.note, created_by: p.created_by })),
+              ...projectedDebits.map(d  => ({ kind: 'debit',   id: d.id, date: d.debit_date,   amount: d.amount, note: d.note, created_by: d.created_by })),
+            ]
+              .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+              .map(item => (
+                <div key={`${item.kind}-${item.id}`} className="flex items-center justify-between text-sm py-2 border-b"
+                  style={{ borderColor: 'var(--border)' }}>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase"
+                      style={{
+                        background: item.kind === 'deposit' ? 'var(--status-ok-bg)' : 'var(--status-critical-bg)',
+                        color:      item.kind === 'deposit' ? 'var(--status-ok)'    : 'var(--status-critical)',
+                      }}>
+                      {item.kind === 'deposit' ? 'IN' : 'OUT'}
+                    </span>
+                    <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{ET(item.date)}</span>
+                    <span style={{ color: item.kind === 'deposit' ? 'var(--status-ok)' : 'var(--status-critical)' }}>
+                      {item.kind === 'deposit' ? '+' : '−'}{fmt$(item.amount)}
+                    </span>
+                    {item.note && <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{item.note}</span>}
+                    {item.created_by && <span className="text-xs" style={{ color: 'var(--text-muted)' }}>by {item.created_by}</span>}
+                  </div>
+                  <button onClick={() => item.kind === 'deposit'
+                      ? deleteDeposit(item.id, item.date, item.amount)
+                      : deleteDebit(item.id, item.date, item.amount)}
+                    className="text-xs px-2 py-0.5 rounded"
+                    style={{ color: 'var(--status-critical)', background: 'var(--status-critical-bg)' }}>
+                    Remove
+                  </button>
                 </div>
-                <button onClick={() => deleteDeposit(p.id, p.deposit_date, p.amount)}
-                  className="text-xs px-2 py-0.5 rounded"
-                  style={{ color: 'var(--status-critical)', background: 'var(--status-critical-bg)' }}>
-                  Remove
-                </button>
-              </div>
-            ))}
+              ))}
           </div>
         </div>
       )}
@@ -682,7 +892,7 @@ export default function CashflowPage() {
           <table className="w-full text-sm">
             <thead style={{ background: 'var(--surface2)' }}>
               <tr>
-                {['', tableViewMode === 'week' ? 'Week' : 'Date', 'Proj. Deposit', 'Postage Due', 'EPS Balance', 'Stripe Expected', 'Invoice Expected', 'Drops', ''].map((h, i) => (
+                {['', tableViewMode === 'week' ? 'Week' : 'Date', 'Proj. Deposit', 'Postage Due', 'Other Debits', 'EPS Balance', 'Stripe Expected', 'Invoice Expected', 'Drops', ''].map((h, i) => (
                   <th key={i} className="text-left px-3 py-2 text-xs font-semibold whitespace-nowrap"
                     style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
                 ))}
@@ -722,6 +932,11 @@ export default function CashflowPage() {
                       {r.deposit > 0 ? fmt$(r.deposit) : '—'}
                     </td>
                     <td className="px-3 py-2.5" style={{ color: isGap ? 'var(--status-critical)' : 'var(--text-primary)' }}>{fmt$(r.postage)}</td>
+                    <td className="px-3 py-2.5"
+                      style={{ color: r.otherDebits > 0 ? 'var(--status-critical)' : 'var(--text-muted)' }}
+                      title={r.otherDebits > 0 ? r.otherDebitItems.map(it => `${ET(it.debit_date)} · ${fmt$(it.amount)}${it.note ? ' — ' + it.note : ''}`).join('\n') : ''}>
+                      {r.otherDebits > 0 ? fmt$(r.otherDebits) : '—'}
+                    </td>
                     <td className="px-3 py-2.5 font-medium" style={{ color: r.runningBalance == null ? 'var(--text-muted)' : isGap ? 'var(--status-critical)' : 'var(--status-ok)' }}>
                       {r.runningBalance != null ? fmt$(r.runningBalance) : '—'}
                     </td>
@@ -733,7 +948,7 @@ export default function CashflowPage() {
 
                   isExpanded && (
                     <tr key={`day-${r.date}-exp`}>
-                      <td colSpan={9} style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)', padding: 0 }}>
+                      <td colSpan={10} style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)', padding: 0 }}>
                         <div className="px-8 py-2">
                           <table className="w-full text-xs">
                             <thead style={{ background: 'var(--surface)' }}>
@@ -856,6 +1071,11 @@ export default function CashflowPage() {
                       {r.projDeposit > 0 ? fmt$(r.projDeposit) : '—'}
                     </td>
                     <td className="px-3 py-2.5" style={{ color: isGap ? 'var(--status-critical)' : 'var(--text-primary)' }}>{fmt$(r.postageDue)}</td>
+                    <td className="px-3 py-2.5"
+                      style={{ color: r.otherDebits > 0 ? 'var(--status-critical)' : 'var(--text-muted)' }}
+                      title={r.otherDebits > 0 ? r.otherDebitItems.map(it => `${ET(it.debit_date)} · ${fmt$(it.amount)}${it.note ? ' — ' + it.note : ''}`).join('\n') : ''}>
+                      {r.otherDebits > 0 ? fmt$(r.otherDebits) : '—'}
+                    </td>
                     <td className="px-3 py-2.5 font-medium" style={{ color: isGap ? 'var(--status-critical)' : 'var(--status-ok)' }}>{fmt$(r.runningBalance)}</td>
                     <td className="px-3 py-2.5" style={{ color: 'var(--status-ok)' }}>{fmt$(r.expectedStripe)}</td>
                     <td className="px-3 py-2.5" style={{ color: 'var(--text-secondary)' }}>{fmt$(r.expectedInvoice)}</td>
@@ -872,7 +1092,7 @@ export default function CashflowPage() {
                   // Expanded: day accordions
                   isExpanded && (
                     <tr key={`${r.weekStart}-expanded`}>
-                      <td colSpan={9} style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)', padding: 0 }}>
+                      <td colSpan={10} style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)', padding: 0 }}>
                         <div className="px-8 py-3 space-y-2">
                           {dayKeys.map(dayKey => {
                             const dayDrops = byDay[dayKey];
