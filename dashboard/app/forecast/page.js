@@ -166,6 +166,11 @@ export default function ForecastPage() {
   const [loading, setLoading]                   = useState(true);
   const [chartMode, setChartMode]               = useState('product'); // 'order' | 'drop' | 'product'
   const [selectedProduct, setSelectedProduct]   = useState(null);
+  // When true the load extends drop_est_date back 4 weeks so the trend chart /
+  // weekly breakdown include the prior month for comparison. Filter is on
+  // est date specifically — we want to see scheduled-mailing trends, not
+  // when drops actually mailed.
+  const [includePast4Weeks, setIncludePast4Weeks] = useState(false);
 
   const today         = new Date().toISOString().split('T')[0];
   const nextWeekStart = addDays(getWeekStart(today), 7); // start of next week
@@ -174,12 +179,17 @@ export default function ForecastPage() {
     setLoading(true);
     const in12w   = addDays(today, 84);
     const since90 = addDays(today, -90);
+    // Window start: today by default, 4 weeks back when the toggle is on.
+    // Filter is on drop_est_date so we trend SCHEDULED mailings — drops that
+    // were planned for those past weeks, regardless of whether they actually
+    // mailed.
+    const windowStart = includePast4Weeks ? addDays(today, -28) : today;
 
     const [{ data: dropData }, { data: txns }, { data: projData }, { data: debitData }] = await Promise.all([
       supabase.from('osprey_mail_drops')
         .select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, postage_amount, actual_postage, mail_method, mail_drop_quantity, mail_drop_amount, order_amount, payment_amount_applied')
         .in('order_status', FORECAST_STATUSES)
-        .gte('drop_est_date', today)           // ← from today (KPI includes current week)
+        .gte('drop_est_date', windowStart)
         .lte('drop_est_date', in12w),
       supabase.from('usps_transactions')
         .select('transaction_number, transaction_date, ending_balance, osprey_mail_drop_id')
@@ -203,7 +213,7 @@ export default function ForecastPage() {
     setProjectedDeposits(projData || []);
     setProjectedDebits(debitData || []);
     setLoading(false);
-  }, [today, nextWeekStart]);
+  }, [today, nextWeekStart, includePast4Weeks]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -305,13 +315,17 @@ export default function ForecastPage() {
   const runwayData = useMemo(() => {
     let balance = currentBalance;
     const data = [{ date: today, balance }];
+    // Filter to only events on or after today — past est dates are included
+    // in the breakdown table for trend visibility, but a runway projection
+    // walks the balance forward from today, so historical events would
+    // distort the line.
     const events = [
       ...weeklyBreakdown.map(w => ({ date: addDays(w.week, 3), amount: -w.total, type: 'postage' })),
       ...projectedDeposits.map(p => ({ date: p.deposit_date, amount: p.amount, type: 'deposit' })),
       // Manual future debits — non-Osprey EPS outflows logged on /cashflow.
       // Subtract on their date so the runway agrees with the cashflow page.
       ...projectedDebits.map(d => ({ date: d.debit_date, amount: -(d.amount || 0), type: 'debit' })),
-    ].sort((a, b) => a.date.localeCompare(b.date));
+    ].filter(e => e.date >= today).sort((a, b) => a.date.localeCompare(b.date));
     for (const e of events) {
       balance += e.amount;
       data.push({ date: e.date, balance: +balance.toFixed(2), type: e.type });
@@ -350,9 +364,24 @@ export default function ForecastPage() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>Postage Forecast</h1>
-        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-          Next week onwards · {drops.length} drops · {weeklyBreakdown.length} weeks
-        </p>
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Toggle: extend the est-date window 4 weeks back so weekly
+              breakdown / chart can show the prior month's scheduled trend.
+              Filtered on drop_est_date specifically — the user wants to see
+              what was *planned* to mail, not what actually mailed. */}
+          <button onClick={() => setIncludePast4Weeks(v => !v)}
+            className="text-xs px-3 py-1 rounded font-medium transition-colors"
+            style={{
+              background: includePast4Weeks ? 'var(--accent)' : 'var(--surface2)',
+              color:      includePast4Weeks ? 'var(--accent-text)' : 'var(--text-secondary)',
+              border: '1px solid var(--border)',
+            }}>
+            {includePast4Weeks ? '✓ Including past 4 weeks' : '+ Include past 4 weeks'}
+          </button>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            {includePast4Weeks ? 'Past 4 weeks → next 12 weeks' : 'Next week onwards'} · {drops.length} drops · {weeklyBreakdown.length} weeks
+          </p>
+        </div>
       </div>
 
       {/* KPI Cards */}
