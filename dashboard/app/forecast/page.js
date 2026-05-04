@@ -4,9 +4,9 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { createClient } from '../../lib/supabase';
 import { effectivePostage, isLdpMailMethod } from '../../lib/postage';
 import {
-  AreaChart, Area, BarChart, Bar,
+  ComposedChart, AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip,
-  ReferenceLine, ResponsiveContainer, Legend,
+  ReferenceLine, ResponsiveContainer, Legend, Cell, Line,
 } from 'recharts';
 
 const fmt$ = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -180,10 +180,10 @@ export default function ForecastPage() {
     const in12w   = addDays(today, 84);
     const since90 = addDays(today, -90);
     // Window start: today by default, 4 weeks back when the toggle is on.
-    // Filter is on drop_est_date so we trend SCHEDULED mailings — drops that
-    // were planned for those past weeks, regardless of whether they actually
-    // mailed.
-    const windowStart = includePast4Weeks ? addDays(today, -28) : today;
+    // Anchor to the start of the current week (Sunday) so we get 4 complete
+    // prior weeks + the current week in full — avoids a mid-week gap if
+    // today is not a Sunday.
+    const windowStart = includePast4Weeks ? addDays(getWeekStart(today), -28) : today;
 
     const [{ data: dropData }, { data: txns }, { data: projData }, { data: debitData }] = await Promise.all([
       supabase.from('osprey_mail_drops')
@@ -267,14 +267,22 @@ export default function ForecastPage() {
     Object.fromEntries(productCategories.map(({ cat, color }) => [cat, color])),
   [productCategories]);
 
-  // ── Weekly breakdown — order, drop, AND product buckets (chart: next week+) ─
+  // ── Weekly breakdown — order, drop, AND product buckets ─────────────────────
+  // When includePast4Weeks is on, include from windowStart (4 prior full weeks)
+  // so the chart shows the comparison window. Otherwise start from next week.
   const weeklyBreakdown = useMemo(() => {
+    const currentWeekStart = getWeekStart(today);
+    const cutoff = includePast4Weeks ? addDays(currentWeekStart, -28) : nextWeekStart;
     const weekMap = {};
     for (const d of drops) {
       if (!d.drop_est_date) continue;
       const ws = getWeekStart(d.drop_est_date);
-      if (ws < nextWeekStart) continue; // chart starts next week; current week only in KPI totals
-      if (!weekMap[ws]) weekMap[ws] = { week: ws, label: weekRangeLabel(ws), total: 0 };
+      if (ws < cutoff) continue;
+      if (!weekMap[ws]) weekMap[ws] = {
+        week: ws, label: weekRangeLabel(ws), total: 0,
+        // weeks whose Sunday is before this week's Sunday are "past"
+        isPast: ws < currentWeekStart,
+      };
       const p  = postage(d);
       weekMap[ws].total += p;
 
@@ -287,19 +295,24 @@ export default function ForecastPage() {
       const cat = d.product_category || 'Unknown';
       weekMap[ws][`p_${cat}`] = (weekMap[ws][`p_${cat}`] || 0) + p;
     }
-    return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week)).slice(0, 12);
-  }, [drops, postage, nextWeekStart]);
+    return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week)).slice(0, 17);
+  }, [drops, postage, nextWeekStart, includePast4Weeks, today]);
 
   // ── Filtered chart data when a product is selected ────────────────────────
   const chartWeeklyBreakdown = useMemo(() => {
     if (!selectedProduct) return weeklyBreakdown;
-    // Recompute weekly data using only drops matching the selected product
+    const currentWeekStart = getWeekStart(today);
+    const cutoff = includePast4Weeks ? addDays(currentWeekStart, -28) : nextWeekStart;
     const weekMap = {};
     for (const d of drops) {
       if (!d.drop_est_date) continue;
       if ((d.product_category || 'Unknown') !== selectedProduct) continue;
       const ws = getWeekStart(d.drop_est_date);
-      if (!weekMap[ws]) weekMap[ws] = { week: ws, label: weekRangeLabel(ws), total: 0 };
+      if (ws < cutoff) continue;
+      if (!weekMap[ws]) weekMap[ws] = {
+        week: ws, label: weekRangeLabel(ws), total: 0,
+        isPast: ws < currentWeekStart,
+      };
       const p = postage(d);
       weekMap[ws].total += p;
       const ob = orderBucket(d.order_status);
@@ -309,7 +322,7 @@ export default function ForecastPage() {
       weekMap[ws][`p_${selectedProduct}`] = (weekMap[ws][`p_${selectedProduct}`] || 0) + p;
     }
     return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week));
-  }, [drops, weeklyBreakdown, selectedProduct, postage]);
+  }, [drops, weeklyBreakdown, selectedProduct, postage, includePast4Weeks, nextWeekStart, today]);
 
   // ── EPS runway ────────────────────────────────────────────────────────────
   const runwayData = useMemo(() => {
@@ -320,7 +333,9 @@ export default function ForecastPage() {
     // walks the balance forward from today, so historical events would
     // distort the line.
     const events = [
-      ...weeklyBreakdown.map(w => ({ date: addDays(w.week, 3), amount: -w.total, type: 'postage' })),
+      // Only project future (and current-week) postage — past weeks are already
+      // reflected in currentBalance and shouldn't double-count the runway.
+      ...weeklyBreakdown.filter(w => !w.isPast).map(w => ({ date: addDays(w.week, 3), amount: -w.total, type: 'postage' })),
       ...projectedDeposits.map(p => ({ date: p.deposit_date, amount: p.amount, type: 'deposit' })),
       // Manual future debits — non-Osprey EPS outflows logged on /cashflow.
       // Subtract on their date so the runway agrees with the cashflow page.
@@ -332,6 +347,30 @@ export default function ForecastPage() {
     }
     return data;
   }, [currentBalance, weeklyBreakdown, projectedDeposits, projectedDebits, today]);
+
+  // Historical EPS balance points for the faded "past" portion of the runway.
+  const epsChartData = useMemo(() => {
+    if (!includePast4Weeks) return runwayData;
+    const windowStart = addDays(getWeekStart(today), -28);
+    // Build a past-balance series from transactions, sorted ascending.
+    const pastPoints = [...transactions]
+      .filter(t => t.transaction_date >= windowStart && t.transaction_date < today)
+      .sort((a, b) => a.transaction_date.localeCompare(b.transaction_date))
+      .map(t => ({ date: t.transaction_date, pastBalance: t.ending_balance }));
+    // Deduplicate by date (keep last balance for each day).
+    const deduped = pastPoints.reduce((acc, pt) => {
+      if (acc.length && acc[acc.length - 1].date === pt.date) {
+        acc[acc.length - 1].pastBalance = pt.pastBalance;
+      } else {
+        acc.push(pt);
+      }
+      return acc;
+    }, []);
+    // Splice at today: share the currentBalance so both lines connect cleanly.
+    const todayJoin = { date: today, pastBalance: currentBalance, balance: currentBalance };
+    const futurePoints = runwayData.filter(d => d.date > today);
+    return [...deduped, todayJoin, ...futurePoints];
+  }, [includePast4Weeks, transactions, runwayData, currentBalance, today]);
 
   // ── KPIs ──────────────────────────────────────────────────────────────────
   const totalPostage = useMemo(() => drops.reduce((s, d) => s + postage(d), 0), [drops, postage]);
@@ -401,18 +440,37 @@ export default function ForecastPage() {
 
       {/* EPS Balance Runway */}
       <div className="rounded-xl p-4 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-        <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>
-          EPS Balance Runway — Next 12 Weeks
-        </h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
+            EPS Balance Runway — {includePast4Weeks ? 'Past 4 weeks → next 12 weeks' : 'Next 12 weeks'}
+          </h2>
+          {includePast4Weeks && (
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Faded line = historical balance
+            </span>
+          )}
+        </div>
         <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={runwayData}>
+          <ComposedChart data={epsChartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
             <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
             <YAxis tickFormatter={fmtK} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
             <Tooltip formatter={(v) => fmt$(v)} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
             <ReferenceLine y={0} stroke="var(--status-critical)" strokeDasharray="4 4" />
+            {includePast4Weeks && (
+              <Line
+                type="monotone"
+                dataKey="pastBalance"
+                stroke="var(--accent)"
+                strokeWidth={1.5}
+                strokeOpacity={0.35}
+                dot={false}
+                connectNulls={false}
+                legendType="none"
+              />
+            )}
             <Area type="monotone" dataKey="balance" stroke="var(--accent)" fill="var(--accent-light)" strokeWidth={2} dot={false} />
-          </AreaChart>
+          </ComposedChart>
         </ResponsiveContainer>
       </div>
 
@@ -490,7 +548,11 @@ export default function ForecastPage() {
             />
             <Legend wrapperStyle={{ fontSize: 12, color: 'var(--text-secondary)' }} />
             {Object.entries(activeBuckets).map(([bucket, color]) => (
-              <Bar key={bucket} dataKey={`${prefix}${bucket}`} name={bucket} stackId="a" fill={color} />
+              <Bar key={bucket} dataKey={`${prefix}${bucket}`} name={bucket} stackId="a" fill={color}>
+                {chartWeeklyBreakdown.map((w, i) => (
+                  <Cell key={i} fill={color} fillOpacity={w.isPast ? 0.32 : 1} />
+                ))}
+              </Bar>
             ))}
           </BarChart>
         </ResponsiveContainer>
