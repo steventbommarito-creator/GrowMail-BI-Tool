@@ -1271,8 +1271,11 @@ export default function CashflowPage() {
                                         }}>
                                           <td className="px-2 py-1.5 w-7 text-center">
                                             <button
-                                              onClick={() => isHot ? clearHotJob(d) : setHotJobModal({ drop: d })}
-                                              title={isHot ? `Hot: ${hotInfo?.reason || '(no reason)'}\nClick to remove` : 'Mark as hot job'}
+                                              onClick={e => { e.stopPropagation(); isHot ? setHotClearConfirm({ drop: d }) : setHotJobModal({ drop: d }); }}
+                                              title={isHot ? undefined : 'Mark as hot job'}
+                                              onMouseEnter={e => isHot && setHotTooltip({ dropId: d.mail_drop_id, x: e.clientX, y: e.clientY })}
+                                              onMouseMove={e => isHot && setHotTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
+                                              onMouseLeave={() => setHotTooltip(null)}
                                               style={{ fontSize: 14, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', filter: isHot ? 'none' : 'grayscale(1) opacity(0.35)', padding: 0 }}
                                             >🔥</button>
                                           </td>
