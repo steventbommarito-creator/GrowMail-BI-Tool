@@ -118,6 +118,8 @@ export default function CashflowPage() {
   const [activeDrawer, setActiveDrawer] = useState(null);   // null | 'balance' | 'postage' | 'pastdue' | 'deposits' — KPI drilldown drawer
   const [hotJobs, setHotJobs] = useState(new Map());         // mail_drop_id → { reason, set_by, set_at }
   const [hotJobModal, setHotJobModal] = useState(null);      // null | { drop } — popup for setting reason
+  const [hotTooltip, setHotTooltip] = useState(null);        // null | { dropId, x, y } — hover card
+  const [hotClearConfirm, setHotClearConfirm] = useState(null); // null | { drop } — confirm removal
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUserEmail(data?.user?.email || ''));
@@ -1021,8 +1023,11 @@ export default function CashflowPage() {
                                 }}>
                                   <td className="px-2 py-1.5 w-7 text-center">
                                     <button
-                                      onClick={() => isHot ? clearHotJob(d) : setHotJobModal({ drop: d })}
-                                      title={isHot ? `Hot: ${hotInfo?.reason || '(no reason)'}\nClick to remove` : 'Mark as hot job'}
+                                      onClick={() => isHot ? setHotClearConfirm({ drop: d }) : setHotJobModal({ drop: d })}
+                                      title={isHot ? undefined : 'Mark as hot job'}
+                                      onMouseEnter={e => isHot && setHotTooltip({ dropId: d.mail_drop_id, x: e.clientX, y: e.clientY })}
+                                      onMouseMove={e => isHot && setHotTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
+                                      onMouseLeave={() => setHotTooltip(null)}
                                       style={{ fontSize: 14, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', filter: isHot ? 'none' : 'grayscale(1) opacity(0.35)', padding: 0 }}
                                     >🔥</button>
                                   </td>
@@ -1817,6 +1822,89 @@ export default function CashflowPage() {
                   background: 'var(--accent)', border: 'none', color: '#fff', fontWeight: 600,
                 }}>
                 Save 🔥
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Hot Job hover tooltip ─────────────────────────────────────────── */}
+      {hotTooltip && (() => {
+        const info = hotJobs.get(hotTooltip.dropId);
+        if (!info) return null;
+        return (
+          <div style={{
+            position: 'fixed',
+            left: hotTooltip.x + 14,
+            top: hotTooltip.y - 12,
+            zIndex: 9998,
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            padding: '10px 14px',
+            fontSize: 12,
+            boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+            pointerEvents: 'none',
+            minWidth: 180,
+            maxWidth: 280,
+          }}>
+            <p style={{ margin: '0 0 6px', fontWeight: 700, color: 'var(--text-primary)', fontSize: 13 }}>🔥 Hot Job</p>
+            <p style={{ margin: '0 0 2px', color: 'var(--text-muted)', fontSize: 11 }}>Set by</p>
+            <p style={{ margin: '0 0 6px', color: 'var(--text-secondary)' }}>{info.set_by || '—'}</p>
+            {info.reason ? (
+              <>
+                <p style={{ margin: '0 0 2px', color: 'var(--text-muted)', fontSize: 11 }}>Reason</p>
+                <p style={{ margin: 0, color: 'var(--text-primary)', fontStyle: 'italic' }}>"{info.reason}"</p>
+              </>
+            ) : (
+              <p style={{ margin: 0, color: 'var(--text-muted)', fontStyle: 'italic' }}>No reason provided</p>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ── Hot Job remove confirm dialog ────────────────────────────────── */}
+      {hotClearConfirm && (
+        <div
+          onClick={() => setHotClearConfirm(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 9999,
+          }}>
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 10,
+              padding: '20px 24px',
+              width: 340,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+            }}>
+            <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>
+              Remove from Hot Jobs?
+            </p>
+            <p style={{ margin: '0 0 16px', fontSize: 12, color: 'var(--text-muted)' }}>
+              {hotClearConfirm.drop.customer_name || hotClearConfirm.drop.mail_drop_id} — Drop {hotClearConfirm.drop.mail_drop_id}
+            </p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setHotClearConfirm(null)}
+                style={{
+                  padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                  background: 'var(--surface2)', border: '1px solid var(--border)',
+                  color: 'var(--text-secondary)',
+                }}>
+                Cancel
+              </button>
+              <button
+                onClick={() => { clearHotJob(hotClearConfirm.drop); setHotClearConfirm(null); }}
+                style={{
+                  padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                  background: 'var(--status-critical)', border: 'none', color: '#fff', fontWeight: 600,
+                }}>
+                Remove
               </button>
             </div>
           </div>

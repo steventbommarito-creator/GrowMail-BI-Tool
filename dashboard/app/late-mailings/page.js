@@ -83,7 +83,8 @@ export default function LateMailingsPage() {
   const [transactions, setTransactions] = useState([]);
   const [customerTerms, setCustomerTerms] = useState({});
   const [epsDeductedMap, setEpsDeductedMap] = useState({});
-  const [hotJobs, setHotJobs] = useState(new Set());         // Set<mail_drop_id> currently hot
+  const [hotJobs, setHotJobs] = useState(new Map());         // mail_drop_id → { reason, set_by }
+  const [hotTooltip, setHotTooltip] = useState(null);        // null | { dropId, x, y } — hover card
   const [loading, setLoading] = useState(true);
   const [sortKey, setSortKey] = useState('daysLate');
   const [sortDir, setSortDir] = useState('desc');
@@ -140,12 +141,13 @@ export default function LateMailingsPage() {
       }
     }
 
-    // Load currently-hot drops for read-only fire emoji display
+    // Load currently-hot drops for read-only fire emoji display (with reason + set_by for tooltip)
     const { data: hotData } = await supabase
       .from('hot_jobs')
-      .select('mail_drop_id')
+      .select('mail_drop_id, reason, set_by')
       .eq('is_hot', true);
-    const hotSet = new Set((hotData || []).map(h => h.mail_drop_id));
+    const hotSet = new Map();
+    for (const h of (hotData || [])) hotSet.set(h.mail_drop_id, { reason: h.reason, set_by: h.set_by });
 
     setTransactions(txns || []);
     setDrops(deduped);
@@ -513,8 +515,10 @@ export default function LateMailingsPage() {
                   <td className="px-2 py-1.5 w-8 text-center">
                     {hotJobs.has(d.mail_drop_id) && (
                       <span
-                        title={`Hot job — flagged on Cashflow tab`}
-                        style={{ fontSize: 14, lineHeight: 1, cursor: 'default' }}
+                        onMouseEnter={e => setHotTooltip({ dropId: d.mail_drop_id, x: e.clientX, y: e.clientY })}
+                        onMouseMove={e => setHotTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
+                        onMouseLeave={() => setHotTooltip(null)}
+                        style={{ fontSize: 14, lineHeight: 1, cursor: 'default', display: 'inline-block' }}
                       >🔥</span>
                     )}
                   </td>
@@ -614,6 +618,41 @@ export default function LateMailingsPage() {
               }}>
               Export CSV
             </button>
+          </div>
+        );
+      })()}
+
+      {/* ── Hot Job hover tooltip ─────────────────────────────────────────── */}
+      {hotTooltip && (() => {
+        const info = hotJobs.get(hotTooltip.dropId);
+        if (!info) return null;
+        return (
+          <div style={{
+            position: 'fixed',
+            left: hotTooltip.x + 14,
+            top: hotTooltip.y - 12,
+            zIndex: 9998,
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            padding: '10px 14px',
+            fontSize: 12,
+            boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+            pointerEvents: 'none',
+            minWidth: 180,
+            maxWidth: 280,
+          }}>
+            <p style={{ margin: '0 0 6px', fontWeight: 700, color: 'var(--text-primary)', fontSize: 13 }}>🔥 Hot Job</p>
+            <p style={{ margin: '0 0 2px', color: 'var(--text-muted)', fontSize: 11 }}>Set by</p>
+            <p style={{ margin: '0 0 6px', color: 'var(--text-secondary)' }}>{info.set_by || '—'}</p>
+            {info.reason ? (
+              <>
+                <p style={{ margin: '0 0 2px', color: 'var(--text-muted)', fontSize: 11 }}>Reason</p>
+                <p style={{ margin: 0, color: 'var(--text-primary)', fontStyle: 'italic' }}>"{info.reason}"</p>
+              </>
+            ) : (
+              <p style={{ margin: 0, color: 'var(--text-muted)', fontStyle: 'italic' }}>No reason provided</p>
+            )}
           </div>
         );
       })()}
