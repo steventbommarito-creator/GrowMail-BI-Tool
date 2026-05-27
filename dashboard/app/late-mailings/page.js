@@ -87,6 +87,8 @@ export default function LateMailingsPage() {
   const [loading, setLoading] = useState(true);
   const [sortKey, setSortKey] = useState('daysLate');
   const [sortDir, setSortDir] = useState('desc');
+  const [planningMode, setPlanningMode] = useState(false);   // Planning Mode toggle
+  const [planSelected, setPlanSelected] = useState(new Set()); // Set<mail_drop_id> checked in plan
 
   const today = useMemo(() => new Date().toISOString().split('T')[0], []);
 
@@ -411,17 +413,42 @@ export default function LateMailingsPage() {
       <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border)' }}>
         <div className="px-4 py-3 flex items-center justify-between"
           style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
-          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
-            Late Drops ({sortedRows.length})
-          </h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
+              Late Drops ({sortedRows.length})
+            </h2>
+            <button
+              onClick={() => {
+                setPlanningMode(p => !p);
+                setPlanSelected(new Set());
+              }}
+              className="text-xs px-2.5 py-1 rounded font-medium"
+              style={{
+                background: planningMode ? 'var(--accent)' : 'var(--surface2)',
+                color:      planningMode ? '#fff'          : 'var(--text-secondary)',
+                border:     planningMode ? 'none'          : '1px solid var(--border)',
+                cursor: 'pointer',
+              }}>
+              {planningMode ? '📋 Planning Mode ON' : '📋 Planning Mode'}
+            </button>
+          </div>
           <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            Click a column header to re-sort. Running Total accumulates postage top-down in the current sort order. Strikethrough postage = drop already charged to EPS. (est) = estimate from Osprey, actual not yet posted.
+            {planningMode
+              ? 'Check rows to build a postage plan. Click export to download selected.'
+              : 'Click a column header to re-sort. Running Total accumulates postage top-down in the current sort order. Strikethrough postage = drop already charged to EPS. (est) = estimate from Osprey, actual not yet posted.'}
           </p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead style={{ background: 'var(--surface2)', color: 'var(--text-secondary)' }}>
               <tr>
+                {/* Planning Mode: Include checkbox column */}
+                {planningMode && (
+                  <th className="px-2 py-2 w-8 text-center font-medium"
+                    style={{ color: 'var(--text-muted)', fontSize: 10 }}>
+                    Include
+                  </th>
+                )}
                 {/* Fire emoji column — read-only, not sortable */}
                 <th className="px-2 py-2 w-8" />
                 {[
@@ -459,13 +486,30 @@ export default function LateMailingsPage() {
             <tbody>
               {sortedRowsWithRunning.length === 0 && (
                 <tr>
-                  <td colSpan={12} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
+                  <td colSpan={planningMode ? 13 : 12} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
                     No late drops. 🎉
                   </td>
                 </tr>
               )}
               {sortedRowsWithRunning.map(d => (
-                <tr key={d.mail_drop_id} style={{ borderTop: '1px solid var(--border)' }}>
+                <tr key={d.mail_drop_id} style={{ borderTop: '1px solid var(--border)', background: planningMode && planSelected.has(d.mail_drop_id) ? 'var(--accent-light)' : undefined }}>
+                  {/* Planning Mode checkbox */}
+                  {planningMode && (
+                    <td className="px-2 py-1.5 w-8 text-center">
+                      <input
+                        type="checkbox"
+                        checked={planSelected.has(d.mail_drop_id)}
+                        onChange={() => {
+                          setPlanSelected(prev => {
+                            const next = new Set(prev);
+                            next.has(d.mail_drop_id) ? next.delete(d.mail_drop_id) : next.add(d.mail_drop_id);
+                            return next;
+                          });
+                        }}
+                        style={{ cursor: 'pointer', accentColor: 'var(--accent)' }}
+                      />
+                    </td>
+                  )}
                   <td className="px-2 py-1.5 w-8 text-center">
                     {hotJobs.has(d.mail_drop_id) && (
                       <span
@@ -525,6 +569,54 @@ export default function LateMailingsPage() {
           </table>
         </div>
       </div>
+
+      {/* ── Planning Mode floating bar ────────────────────────────────────── */}
+      {planningMode && planSelected.size > 0 && (() => {
+        const selectedDrops = sortedRowsWithRunning.filter(d => planSelected.has(d.mail_drop_id));
+        const planPostageTotal = selectedDrops.reduce((sum, d) => sum + (d.rawPostage || 0), 0);
+        return (
+          <div style={{
+            position: 'fixed', bottom: 24, right: 28,
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 10,
+            padding: '12px 18px',
+            display: 'flex', alignItems: 'center', gap: 16,
+            boxShadow: '0 4px 24px rgba(0,0,0,0.35)',
+            zIndex: 9000,
+            minWidth: 280,
+          }}>
+            <div>
+              <p style={{ margin: 0, fontSize: 11, color: 'var(--text-muted)' }}>
+                {planSelected.size} drop{planSelected.size !== 1 ? 's' : ''} selected
+              </p>
+              <p style={{ margin: '2px 0 0', fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
+                {fmt$(planPostageTotal)}
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                const rows = selectedDrops.map(d => ({
+                  'Est Date':   d.drop_est_date || '',
+                  'Customer':   d.customer_name || '',
+                  'Product':    d.product_category || '',
+                  'Order ID':   d.order_id || '',
+                  'Drop ID':    d.mail_drop_id || '',
+                  'Qty':        d.mail_drop_quantity ?? '',
+                  'Postage':    (d.rawPostage || 0).toFixed(2),
+                }));
+                exportToCSV(rows, `late-mailings-plan-${new Date().toISOString().split('T')[0]}`);
+              }}
+              style={{
+                padding: '8px 16px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                background: 'var(--accent)', border: 'none', color: '#fff', fontWeight: 600,
+                whiteSpace: 'nowrap',
+              }}>
+              Export CSV
+            </button>
+          </div>
+        );
+      })()}
     </div>
   );
 }
