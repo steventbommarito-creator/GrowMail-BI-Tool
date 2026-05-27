@@ -122,6 +122,7 @@ export default function CashflowPage() {
   const [hotClearConfirm, setHotClearConfirm] = useState(null); // null | { drop } — confirm removal
   const [plannedDrops, setPlannedDrops] = useState(new Map()); // mail_drop_id → planned_date
   const [plannedTooltip, setPlannedTooltip] = useState(null);  // null | { dropId, x, y } — clock hover card
+  const [planClearConfirm, setPlanClearConfirm] = useState(null); // null | { drop } — remove-from-plan confirm
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUserEmail(data?.user?.email || ''));
@@ -246,6 +247,24 @@ export default function CashflowPage() {
       data_json: { mail_drop_id: drop.mail_drop_id, cleared_by: userEmail },
     });
     setHotJobs(prev => { const m = new Map(prev); m.delete(drop.mail_drop_id); return m; });
+  };
+
+  // Remove a single drop from the plan (clock click → confirm → here)
+  const clearPlan = async (drop) => {
+    const { error } = await supabase
+      .from('planned_drops')
+      .delete()
+      .eq('mail_drop_id', drop.mail_drop_id);
+    if (error) { console.error('Clear plan failed:', error.message); return; }
+    await supabase.from('notifications').insert({
+      event_type: 'plan_cleared',
+      title: `Plan removed — Drop ${drop.mail_drop_id}`,
+      body: `${drop.customer_name || drop.mail_drop_id} removed from plan by ${userEmail || 'unknown'}`,
+      severity: 'info',
+      source: 'planned_drops',
+      data_json: { mail_drop_id: drop.mail_drop_id, cleared_by: userEmail },
+    });
+    setPlannedDrops(prev => { const m = new Map(prev); m.delete(drop.mail_drop_id); return m; });
   };
   // ────────────────────────────────────────────────────────────────────────────
 
@@ -1044,10 +1063,11 @@ export default function CashflowPage() {
                                     >🔥</button>
                                     {plannedInfo && (
                                       <span
+                                        onClick={e => { e.stopPropagation(); setPlanClearConfirm({ drop: d }); }}
                                         onMouseEnter={e => setPlannedTooltip({ dropId: d.mail_drop_id, x: e.clientX, y: e.clientY })}
                                         onMouseMove={e => setPlannedTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
                                         onMouseLeave={() => setPlannedTooltip(null)}
-                                        style={{ fontSize: 13, lineHeight: 1, marginLeft: 3, cursor: 'default', verticalAlign: 'middle' }}
+                                        style={{ fontSize: 13, lineHeight: 1, marginLeft: 3, cursor: 'pointer', verticalAlign: 'middle' }}
                                       >⏰</span>
                                     )}
                                   </td>
@@ -1300,10 +1320,11 @@ export default function CashflowPage() {
                                             >🔥</button>
                                             {plannedInfo && (
                                               <span
+                                                onClick={e => { e.stopPropagation(); setPlanClearConfirm({ drop: d }); }}
                                                 onMouseEnter={e => setPlannedTooltip({ dropId: d.mail_drop_id, x: e.clientX, y: e.clientY })}
                                                 onMouseMove={e => setPlannedTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
                                                 onMouseLeave={() => setPlannedTooltip(null)}
-                                                style={{ fontSize: 13, lineHeight: 1, marginLeft: 3, cursor: 'default', verticalAlign: 'middle' }}
+                                                style={{ fontSize: 13, lineHeight: 1, marginLeft: 3, cursor: 'pointer', verticalAlign: 'middle' }}
                                               >⏰</span>
                                             )}
                                           </td>
@@ -1977,6 +1998,62 @@ export default function CashflowPage() {
           </div>
         </div>
       )}
+
+      {/* ── Remove-from-plan confirm dialog (clock click) ─────────────────── */}
+      {planClearConfirm && (() => {
+        const info = plannedDrops.get(planClearConfirm.drop.mail_drop_id);
+        return (
+          <div
+            onClick={() => setPlanClearConfirm(null)}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              zIndex: 9999,
+            }}>
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                borderRadius: 10,
+                padding: '20px 24px',
+                width: 360,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+              }}>
+              <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>
+                Remove from Plan?
+              </p>
+              <p style={{ margin: '0 0 6px', fontSize: 12, color: 'var(--text-muted)' }}>
+                {planClearConfirm.drop.customer_name || planClearConfirm.drop.mail_drop_id} — Drop {planClearConfirm.drop.mail_drop_id}
+              </p>
+              {info && (
+                <p style={{ margin: '0 0 16px', fontSize: 12, color: 'var(--text-secondary)' }}>
+                  Currently planned for <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{ET(info.planned_date)}</span>.
+                </p>
+              )}
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => setPlanClearConfirm(null)}
+                  style={{
+                    padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                    background: 'var(--surface2)', border: '1px solid var(--border)',
+                    color: 'var(--text-secondary)',
+                  }}>
+                  Cancel
+                </button>
+                <button
+                  onClick={() => { clearPlan(planClearConfirm.drop); setPlanClearConfirm(null); }}
+                  style={{
+                    padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                    background: 'var(--status-critical)', border: 'none', color: '#fff', fontWeight: 600,
+                  }}>
+                  Remove
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </>
   );
 }

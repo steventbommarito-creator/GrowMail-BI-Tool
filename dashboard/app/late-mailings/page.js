@@ -101,6 +101,7 @@ export default function LateMailingsPage() {
   const [futureDrops, setFutureDrops] = useState([]);        // drops with drop_est_date >= today loaded into the plan view
   const [futureCutoffInput, setFutureCutoffInput] = useState(''); // value of the "add through date" picker
   const [savePlanModal, setSavePlanModal] = useState(null);  // null | { date } — save plan date picker modal
+  const [planClearConfirm, setPlanClearConfirm] = useState(null); // null | { drop } — remove-from-plan confirm
   const [userEmail, setUserEmail] = useState('');
 
   const today = useMemo(() => new Date().toISOString().split('T')[0], []);
@@ -344,6 +345,24 @@ export default function LateMailingsPage() {
     setPlanSelected(new Set());
     setSavePlanModal(null);
   }, [planSelected, userEmail, supabase]);
+
+  // ── Clear Plan (remove a single drop from the plan) ──────────────────────
+  const clearPlan = useCallback(async (drop) => {
+    const { error } = await supabase
+      .from('planned_drops')
+      .delete()
+      .eq('mail_drop_id', drop.mail_drop_id);
+    if (error) { console.error('Clear plan failed:', error.message); return; }
+    await supabase.from('notifications').insert({
+      event_type: 'plan_cleared',
+      title: `Plan removed — Drop ${drop.mail_drop_id}`,
+      body: `${drop.customer_name || drop.mail_drop_id} removed from plan by ${userEmail || 'unknown'}`,
+      severity: 'info',
+      source: 'planned_drops',
+      data_json: { mail_drop_id: drop.mail_drop_id, cleared_by: userEmail },
+    });
+    setPlannedDrops(prev => { const m = new Map(prev); m.delete(drop.mail_drop_id); return m; });
+  }, [userEmail, supabase]);
 
   function handleExport() {
     // Export uses the running-total view so the CSV reflects exactly what
@@ -695,9 +714,16 @@ export default function LateMailingsPage() {
                     </span>
                   </td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{ET(d.drop_est_date)}</td>
-                  {/* Planned column — shows planned_date if set */}
-                  <td className="px-3 py-1.5" style={{ color: plannedInfo ? 'var(--accent)' : 'var(--text-muted)', fontWeight: plannedInfo ? 600 : 'normal' }}>
-                    {plannedInfo ? `📅 ${ET(plannedInfo.planned_date)}` : '—'}
+                  {/* Planned column — shows planned_date if set. Click to clear. */}
+                  <td className="px-3 py-1.5"
+                    onClick={plannedInfo ? () => setPlanClearConfirm({ drop: d }) : undefined}
+                    style={{
+                      color: plannedInfo ? 'var(--accent)' : 'var(--text-muted)',
+                      fontWeight: plannedInfo ? 600 : 'normal',
+                      cursor: plannedInfo ? 'pointer' : 'default',
+                    }}
+                    title={plannedInfo ? 'Click to remove from plan' : undefined}>
+                    {plannedInfo ? `⏰ ${ET(plannedInfo.planned_date)}` : '—'}
                   </td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
@@ -776,7 +802,7 @@ export default function LateMailingsPage() {
                 background: 'var(--status-ok)', border: 'none', color: '#fff', fontWeight: 600,
                 whiteSpace: 'nowrap',
               }}>
-              💾 Save Plan
+              Save Plan
             </button>
             <button
               onClick={() => {
@@ -822,7 +848,7 @@ export default function LateMailingsPage() {
               boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
             }}>
             <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>
-              💾 Save Plan
+              Save Plan
             </p>
             <p style={{ margin: '0 0 14px', fontSize: 12, color: 'var(--text-muted)' }}>
               Set the plan date for {planSelected.size} selected drop{planSelected.size !== 1 ? 's' : ''}. If a drop already has a plan date, it will be overwritten.
@@ -859,7 +885,7 @@ export default function LateMailingsPage() {
                   background: 'var(--status-ok)', border: 'none', color: '#fff', fontWeight: 600,
                   opacity: (!savePlanModal.date || savePlanModal.date < today) ? 0.5 : 1,
                 }}>
-                Save 💾
+                Save
               </button>
             </div>
           </div>
@@ -897,6 +923,62 @@ export default function LateMailingsPage() {
             ) : (
               <p style={{ margin: 0, color: 'var(--text-muted)', fontStyle: 'italic' }}>No reason provided</p>
             )}
+          </div>
+        );
+      })()}
+
+      {/* ── Remove-from-plan confirm dialog ───────────────────────────────── */}
+      {planClearConfirm && (() => {
+        const info = plannedDrops.get(planClearConfirm.drop.mail_drop_id);
+        return (
+          <div
+            onClick={() => setPlanClearConfirm(null)}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              zIndex: 9999,
+            }}>
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                borderRadius: 10,
+                padding: '20px 24px',
+                width: 360,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+              }}>
+              <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>
+                Remove from Plan?
+              </p>
+              <p style={{ margin: '0 0 6px', fontSize: 12, color: 'var(--text-muted)' }}>
+                {planClearConfirm.drop.customer_name || planClearConfirm.drop.mail_drop_id} — Drop {planClearConfirm.drop.mail_drop_id}
+              </p>
+              {info && (
+                <p style={{ margin: '0 0 16px', fontSize: 12, color: 'var(--text-secondary)' }}>
+                  Currently planned for <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{ET(info.planned_date)}</span>.
+                </p>
+              )}
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => setPlanClearConfirm(null)}
+                  style={{
+                    padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                    background: 'var(--surface2)', border: '1px solid var(--border)',
+                    color: 'var(--text-secondary)',
+                  }}>
+                  Cancel
+                </button>
+                <button
+                  onClick={() => { clearPlan(planClearConfirm.drop); setPlanClearConfirm(null); }}
+                  style={{
+                    padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                    background: 'var(--status-critical)', border: 'none', color: '#fff', fontWeight: 600,
+                  }}>
+                  Remove
+                </button>
+              </div>
+            </div>
           </div>
         );
       })()}
