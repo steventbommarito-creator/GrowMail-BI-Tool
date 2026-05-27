@@ -1262,6 +1262,7 @@ export default function CashflowPage() {
                     'Date': r.dateKey === 'past-due' ? 'Past Due' : r.dateKey,
                     'Customer': d.customer_name || '',
                     'Web ID': d.web_id || '',
+                    'Order ID': d.order_id || '',
                     'Drop ID': d.mail_drop_id || '',
                     'Product': d.product_category || '',
                     'Terms': d._term || '',
@@ -1352,7 +1353,7 @@ export default function CashflowPage() {
                           <table className="w-full text-xs">
                             <thead>
                               <tr style={{ background: 'var(--surface)' }}>
-                                {['Customer', 'Web ID', 'Drop ID', 'Product', 'Terms', 'Bill Via', 'Sched. Date', 'Est Collection', 'Drop Status', 'Amount'].map(h => (
+                                {['Customer', 'Web ID', 'Order ID', 'Drop ID', 'Product', 'Terms', 'Bill Via', 'Sched. Date', 'Est Collection', 'Drop Status', 'Amount'].map(h => (
                                   <th key={h} className="text-left px-3 py-1.5 font-semibold"
                                     style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>{h}</th>
                                 ))}
@@ -1379,6 +1380,7 @@ export default function CashflowPage() {
                                   }}>
                                     <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                                     <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.web_id || '—'}</td>
+                                    <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.order_id || '—'}</td>
                                     <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}><OspreyDropLink id={d.mail_drop_id} /></td>
                                     <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
                                     <td className="px-3 py-1.5">
