@@ -419,20 +419,32 @@ export default function LateMailingsPage() {
             <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
               Late Drops ({sortedRows.length})
             </h2>
-            <button
-              onClick={() => {
-                setPlanningMode(p => !p);
-                setPlanSelected(new Set());
-              }}
-              className="text-xs px-2.5 py-1 rounded font-medium"
-              style={{
-                background: planningMode ? 'var(--accent)' : 'var(--surface2)',
-                color:      planningMode ? '#fff'          : 'var(--text-secondary)',
-                border:     planningMode ? 'none'          : '1px solid var(--border)',
-                cursor: 'pointer',
-              }}>
-              {planningMode ? '📋 Planning Mode ON' : '📋 Planning Mode'}
-            </button>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer', userSelect: 'none' }}>
+              {/* Toggle track */}
+              <span
+                onClick={() => { setPlanningMode(p => !p); setPlanSelected(new Set()); }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center',
+                  width: 32, height: 18, borderRadius: 9, padding: 2,
+                  background: planningMode ? 'var(--accent)' : 'var(--border)',
+                  transition: 'background 0.2s',
+                  cursor: 'pointer', flexShrink: 0,
+                }}>
+                {/* Thumb */}
+                <span style={{
+                  width: 14, height: 14, borderRadius: '50%', background: '#fff',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+                  transform: planningMode ? 'translateX(14px)' : 'translateX(0)',
+                  transition: 'transform 0.2s',
+                  display: 'block',
+                }} />
+              </span>
+              <span
+                onClick={() => { setPlanningMode(p => !p); setPlanSelected(new Set()); }}
+                style={{ fontSize: 12, color: planningMode ? 'var(--accent)' : 'var(--text-secondary)', fontWeight: planningMode ? 600 : 400 }}>
+                Planning Mode
+              </span>
+            </label>
           </div>
           <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
             {planningMode
