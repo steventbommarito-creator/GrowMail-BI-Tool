@@ -37,6 +37,13 @@ const ET = (iso) => {
   return d.toLocaleDateString('en-US', { timeZone: 'America/Detroit' });
 };
 
+// "2026-05-27" + 7 → "2026-06-03"  (date-only arithmetic, no DST drift)
+function addDays(d, n) {
+  const r = new Date(d + 'T12:00:00');
+  r.setDate(r.getDate() + n);
+  return r.toISOString().split('T')[0];
+}
+
 // Same active-order filter cashflow uses, lifted up so anyone reading the
 // page sees the exact set of statuses we treat as "still in flight".
 const ACTIVE_ORDER_STATUSES = [
@@ -85,11 +92,16 @@ export default function LateMailingsPage() {
   const [epsDeductedMap, setEpsDeductedMap] = useState({});
   const [hotJobs, setHotJobs] = useState(new Map());         // mail_drop_id → { reason, set_by }
   const [hotTooltip, setHotTooltip] = useState(null);        // null | { dropId, x, y } — hover card
+  const [plannedDrops, setPlannedDrops] = useState(new Map()); // mail_drop_id → { planned_date, planned_by }
   const [loading, setLoading] = useState(true);
   const [sortKey, setSortKey] = useState('daysLate');
   const [sortDir, setSortDir] = useState('desc');
   const [planningMode, setPlanningMode] = useState(false);   // Planning Mode toggle
   const [planSelected, setPlanSelected] = useState(new Set()); // Set<mail_drop_id> checked in plan
+  const [futureDrops, setFutureDrops] = useState([]);        // drops with drop_est_date >= today loaded into the plan view
+  const [futureCutoffInput, setFutureCutoffInput] = useState(''); // value of the "add through date" picker
+  const [savePlanModal, setSavePlanModal] = useState(null);  // null | { date } — save plan date picker modal
+  const [userEmail, setUserEmail] = useState('');
 
   const today = useMemo(() => new Date().toISOString().split('T')[0], []);
 
@@ -149,41 +161,46 @@ export default function LateMailingsPage() {
     const hotSet = new Map();
     for (const h of (hotData || [])) hotSet.set(h.mail_drop_id, { reason: h.reason, set_by: h.set_by });
 
+    // Load planned drops (always visible — drives the Planned column + cashflow clock icon)
+    const { data: plannedData } = await supabase
+      .from('planned_drops')
+      .select('mail_drop_id, planned_date, planned_by');
+    const plannedMap = new Map();
+    for (const p of (plannedData || [])) plannedMap.set(p.mail_drop_id, { planned_date: p.planned_date, planned_by: p.planned_by });
+
     setTransactions(txns || []);
     setDrops(deduped);
     setCustomerTerms(termsMap);
     setEpsDeductedMap(epsMap);
     setHotJobs(hotSet);
+    setPlannedDrops(plannedMap);
     setLoading(false);
   }, [today]);
 
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setUserEmail(data?.user?.email || ''));
+  }, []);
+
   useEffect(() => { load(); }, [load]);
 
-  // Enrich each late drop with the fields the rest of the page needs:
-  // billVia, daysLate, postageRequired (post EPS-deduction), epsCharged,
-  // isEst (whether the postage figure is from estimate vs. actual — used
-  // to render the (est) suffix on row-level displays).
-  const lateDrops = useMemo(() => {
-    return drops.map(d => {
-      const billVia = classifyTerm(customerTerms[d.customer_id]);
-      const epsCharged = !!epsDeductedMap[d.mail_drop_id];
-      const rawPostage = effectivePostage(d);
-      const postageRequired = epsCharged ? 0 : rawPostage;
-      const isEst = isEstimatedPostage(d);
-      const daysLate = d.drop_est_date
-        ? Math.floor((new Date(today + 'T12:00:00') - new Date(d.drop_est_date + 'T12:00:00')) / 86400000)
-        : 0;
-      return {
-        ...d,
-        billVia,
-        epsCharged,
-        rawPostage,
-        isEst,
-        postageRequired,
-        daysLate,
-      };
-    });
-  }, [drops, customerTerms, epsDeductedMap, today]);
+  // Enrich each drop with the fields the rest of the page needs:
+  // billVia, daysLate (negative for future), postageRequired (post EPS-deduction),
+  // epsCharged, isEst. Shared between lateDrops and futureDrops so both have the
+  // same shape for rendering / running total / save plan.
+  const enrichDrop = useCallback((d) => {
+    const billVia = classifyTerm(customerTerms[d.customer_id]);
+    const epsCharged = !!epsDeductedMap[d.mail_drop_id];
+    const rawPostage = effectivePostage(d);
+    const postageRequired = epsCharged ? 0 : rawPostage;
+    const isEst = isEstimatedPostage(d);
+    const daysLate = d.drop_est_date
+      ? Math.floor((new Date(today + 'T12:00:00') - new Date(d.drop_est_date + 'T12:00:00')) / 86400000)
+      : 0;
+    return { ...d, billVia, epsCharged, rawPostage, isEst, postageRequired, daysLate };
+  }, [customerTerms, epsDeductedMap, today]);
+
+  const lateDrops = useMemo(() => drops.map(enrichDrop), [drops, enrichDrop]);
+  const enrichedFutureDrops = useMemo(() => futureDrops.map(enrichDrop).map(d => ({ ...d, _isFuture: true })), [futureDrops, enrichDrop]);
 
   // KPI roll-ups. Postage is post-EPS-deduction; revenue numbers use the
   // full mail_drop_amount per the customer's contract regardless of how
@@ -248,17 +265,23 @@ export default function LateMailingsPage() {
   }, [lateDrops, sortKey, sortDir]);
 
   // Running cumulative postage as you scan the table top-to-bottom in the
-  // current sort order. We use postageRequired (post-EPS-deduction), so the
-  // last row's runningTotal equals the "Postage to Catch Up" KPI exactly,
-  // and EPS-already-charged rows contribute $0 — matching the strikethrough
-  // convention. Recomputed whenever sortedRows changes (i.e. on re-sort).
+  // current sort order. Future drops always go at the bottom (chronological)
+  // regardless of sort — the user's "Add Future Days" view is a planning
+  // append, not a sort-aware row.
   const sortedRowsWithRunning = useMemo(() => {
     let running = 0;
-    return sortedRows.map(d => {
+    const lateWithRunning = sortedRows.map(d => {
       running += d.postageRequired;
       return { ...d, runningTotal: +running.toFixed(2) };
     });
-  }, [sortedRows]);
+    const futureWithRunning = [...enrichedFutureDrops]
+      .sort((a, b) => (a.drop_est_date || '').localeCompare(b.drop_est_date || ''))
+      .map(d => {
+        running += d.postageRequired;
+        return { ...d, runningTotal: +running.toFixed(2) };
+      });
+    return [...lateWithRunning, ...futureWithRunning];
+  }, [sortedRows, enrichedFutureDrops]);
 
   function toggleSort(key) {
     if (sortKey === key) {
@@ -268,6 +291,59 @@ export default function LateMailingsPage() {
       setSortDir(key === 'daysLate' ? 'desc' : 'asc');
     }
   }
+
+  // ── Future Days picker (planning mode) ───────────────────────────────────
+  // Loads drops with drop_est_date in [today, cutoff] that aren't already in
+  // the late set. Per user choice: picking 5/30 brings in everything from
+  // today through 5/30 in one batch (option "All drops scheduled up to that date").
+  const addFutureDrops = useCallback(async () => {
+    if (!futureCutoffInput) return;
+    const maxDate = addDays(today, 7);
+    const cutoff = futureCutoffInput > maxDate ? maxDate : futureCutoffInput;
+    const { data, error } = await supabase.from('osprey_mail_drops')
+      .select('mail_drop_id, order_id, customer_id, customer_name, product_category, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, actual_postage, mail_method, mail_drop_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id')
+      .in('order_status', ACTIVE_ORDER_STATUSES)
+      .eq('is_live_status', true)
+      .gte('drop_est_date', today)
+      .lte('drop_est_date', cutoff)
+      .is('drop_act_date', null);
+    if (error) { console.error('Failed to load future drops:', error.message); return; }
+    const seen = new Map();
+    for (const d of (data || [])) seen.set(d.mail_drop_id, d);
+    const existingIds = new Set([...drops, ...futureDrops].map(d => d.mail_drop_id));
+    const newOnes = [...seen.values()].filter(d => !isLdpMailMethod(d) && !existingIds.has(d.mail_drop_id));
+    if (newOnes.length === 0) { setFutureCutoffInput(''); return; }
+    setFutureDrops(prev => [...prev, ...newOnes]);
+    // Fetch any missing customer term labels
+    const newCustomerIds = [...new Set(newOnes.map(d => d.customer_id).filter(c => c && !customerTerms[c]))];
+    if (newCustomerIds.length > 0) {
+      const { data: termsData } = await supabase.from('customer_terms').select('customer_id, term_label').in('customer_id', newCustomerIds);
+      if (termsData) setCustomerTerms(prev => { const next = { ...prev }; for (const t of termsData) next[t.customer_id] = t.term_label; return next; });
+    }
+    setFutureCutoffInput('');
+  }, [futureCutoffInput, today, drops, futureDrops, customerTerms, supabase]);
+
+  // ── Save Plan ────────────────────────────────────────────────────────────
+  // Upserts planned_drops for every currently-checked row with the picked
+  // date. One row per mail_drop_id (re-save overwrites). Logs to notifications.
+  const savePlan = useCallback(async (planDate) => {
+    if (planSelected.size === 0 || !planDate) return;
+    const now = new Date().toISOString();
+    const rows = [...planSelected].map(mid => ({ mail_drop_id: mid, planned_date: planDate, planned_by: userEmail, planned_at: now }));
+    const { error } = await supabase.from('planned_drops').upsert(rows, { onConflict: 'mail_drop_id' });
+    if (error) { console.error('Save plan failed:', error.message); alert('Failed to save plan: ' + error.message); return; }
+    await supabase.from('notifications').insert({
+      event_type: 'plan_saved',
+      title: `📅 Plan saved — ${planSelected.size} drop${planSelected.size !== 1 ? 's' : ''} for ${planDate}`,
+      body: `${planSelected.size} drops planned for ${planDate} by ${userEmail || 'unknown'}`,
+      severity: 'info',
+      source: 'planned_drops',
+      data_json: { count: planSelected.size, planned_date: planDate, planned_by: userEmail },
+    });
+    setPlannedDrops(prev => { const next = new Map(prev); for (const mid of planSelected) next.set(mid, { planned_date: planDate, planned_by: userEmail }); return next; });
+    setPlanSelected(new Set());
+    setSavePlanModal(null);
+  }, [planSelected, userEmail, supabase]);
 
   function handleExport() {
     // Export uses the running-total view so the CSV reflects exactly what
@@ -413,44 +489,100 @@ export default function LateMailingsPage() {
       {/* The drop-by-drop list. Default sort is daysLate desc so the oldest
           stuff is at the top — that's almost always what you came here for. */}
       <div className="rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border)' }}>
-        <div className="px-4 py-3 flex items-center justify-between"
+        <div
           style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
-          <div className="flex items-center gap-3">
-            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
-              Late Drops ({sortedRows.length})
-            </h2>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer', userSelect: 'none' }}>
-              {/* Toggle track */}
-              <span
-                onClick={() => { setPlanningMode(p => !p); setPlanSelected(new Set()); }}
-                style={{
-                  display: 'inline-flex', alignItems: 'center',
-                  width: 32, height: 18, borderRadius: 9, padding: 2,
-                  background: planningMode ? 'var(--accent)' : 'var(--border)',
-                  transition: 'background 0.2s',
-                  cursor: 'pointer', flexShrink: 0,
-                }}>
-                {/* Thumb */}
-                <span style={{
-                  width: 14, height: 14, borderRadius: '50%', background: '#fff',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
-                  transform: planningMode ? 'translateX(14px)' : 'translateX(0)',
-                  transition: 'transform 0.2s',
-                  display: 'block',
-                }} />
-              </span>
-              <span
-                onClick={() => { setPlanningMode(p => !p); setPlanSelected(new Set()); }}
-                style={{ fontSize: 12, color: planningMode ? 'var(--accent)' : 'var(--text-secondary)', fontWeight: planningMode ? 600 : 400 }}>
-                Planning Mode
-              </span>
-            </label>
+          <div className="px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                Late Drops ({sortedRows.length}{enrichedFutureDrops.length > 0 ? ` + ${enrichedFutureDrops.length} future` : ''})
+              </h2>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer', userSelect: 'none' }}>
+                {/* Toggle track */}
+                <span
+                  onClick={() => {
+                    setPlanningMode(p => !p);
+                    setPlanSelected(new Set());
+                    setFutureDrops([]);          // future drops are a planning-mode-only construct
+                    setFutureCutoffInput('');
+                  }}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center',
+                    width: 32, height: 18, borderRadius: 9, padding: 2,
+                    background: planningMode ? 'var(--accent)' : 'var(--border)',
+                    transition: 'background 0.2s',
+                    cursor: 'pointer', flexShrink: 0,
+                  }}>
+                  <span style={{
+                    width: 14, height: 14, borderRadius: '50%', background: '#fff',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+                    transform: planningMode ? 'translateX(14px)' : 'translateX(0)',
+                    transition: 'transform 0.2s',
+                    display: 'block',
+                  }} />
+                </span>
+                <span
+                  onClick={() => {
+                    setPlanningMode(p => !p);
+                    setPlanSelected(new Set());
+                    setFutureDrops([]);
+                    setFutureCutoffInput('');
+                  }}
+                  style={{ fontSize: 12, color: planningMode ? 'var(--accent)' : 'var(--text-secondary)', fontWeight: planningMode ? 600 : 400 }}>
+                  Planning Mode
+                </span>
+              </label>
+            </div>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {planningMode
+                ? 'Check rows to build a postage plan. Click Save Plan or Export Selected to act on it.'
+                : 'Click a column header to re-sort. Running Total accumulates postage top-down. Strikethrough postage = already charged to EPS. (est) = estimate from Osprey.'}
+            </p>
           </div>
-          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            {planningMode
-              ? 'Check rows to build a postage plan. Click export to download selected.'
-              : 'Click a column header to re-sort. Running Total accumulates postage top-down in the current sort order. Strikethrough postage = drop already charged to EPS. (est) = estimate from Osprey, actual not yet posted.'}
-          </p>
+          {/* Planning-mode-only: Add Future Days picker */}
+          {planningMode && (
+            <div className="px-4 pb-3 pt-1 flex items-center gap-3 flex-wrap" style={{ borderTop: '1px solid var(--border)' }}>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>📆 Add Future Days:</span>
+              <input
+                type="date"
+                value={futureCutoffInput}
+                min={today}
+                max={addDays(today, 7)}
+                onChange={e => setFutureCutoffInput(e.target.value)}
+                style={{
+                  fontSize: 12, padding: '4px 8px', borderRadius: 6,
+                  background: 'var(--surface2)', border: '1px solid var(--border)',
+                  color: 'var(--text-primary)', outline: 'none',
+                }}
+              />
+              <button
+                onClick={addFutureDrops}
+                disabled={!futureCutoffInput}
+                style={{
+                  fontSize: 12, padding: '4px 12px', borderRadius: 6, fontWeight: 600,
+                  background: futureCutoffInput ? 'var(--accent)' : 'var(--surface2)',
+                  color: futureCutoffInput ? '#fff' : 'var(--text-muted)',
+                  border: 'none',
+                  cursor: futureCutoffInput ? 'pointer' : 'not-allowed',
+                }}>
+                Save
+              </button>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                Adds every drop with est date from today through the picked date (max +7 days).
+              </span>
+              {enrichedFutureDrops.length > 0 && (
+                <button
+                  onClick={() => setFutureDrops([])}
+                  style={{
+                    fontSize: 11, padding: '3px 10px', borderRadius: 6,
+                    background: 'var(--surface2)', border: '1px solid var(--border)',
+                    color: 'var(--text-secondary)', cursor: 'pointer',
+                    marginLeft: 'auto',
+                  }}>
+                  Clear future drops
+                </button>
+              )}
+            </div>
+          )}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
@@ -476,9 +608,9 @@ export default function LateMailingsPage() {
                   { key: 'mail_drop_quantity', label: 'Qty',        align: 'right' },
                   { key: 'mail_drop_amount',   label: 'Drop Amt',   align: 'right' },
                   { key: 'postageRequired',    label: 'Postage',    align: 'right' },
-                ].map(col => {
+                ].flatMap(col => {
                   const active = sortKey === col.key;
-                  return (
+                  const th = (
                     <th key={col.key}
                       onClick={() => toggleSort(col.key)}
                       className={`px-3 py-2 font-medium cursor-pointer select-none ${col.align === 'right' ? 'text-right' : 'text-left'}`}
@@ -486,6 +618,17 @@ export default function LateMailingsPage() {
                       {col.label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
                     </th>
                   );
+                  // Inject the (non-sortable) Planned column right after Est Date.
+                  if (col.key === 'drop_est_date') {
+                    return [th, (
+                      <th key="planned" className="px-3 py-2 font-medium text-left select-none"
+                        style={{ color: 'var(--text-secondary)' }}
+                        title="Date this drop is planned for (set via Save Plan in Planning Mode)">
+                        Planned
+                      </th>
+                    )];
+                  }
+                  return [th];
                 })}
                 {/* Running Total is intentionally NOT sortable — its values are
                     derived from the current sort order, so sorting by it
@@ -500,13 +643,24 @@ export default function LateMailingsPage() {
             <tbody>
               {sortedRowsWithRunning.length === 0 && (
                 <tr>
-                  <td colSpan={planningMode ? 13 : 12} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
+                  <td colSpan={planningMode ? 14 : 13} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
                     No late drops. 🎉
                   </td>
                 </tr>
               )}
-              {sortedRowsWithRunning.map(d => (
-                <tr key={d.mail_drop_id} style={{ borderTop: '1px solid var(--border)', background: planningMode && planSelected.has(d.mail_drop_id) ? 'var(--accent-light)' : undefined }}>
+              {sortedRowsWithRunning.map(d => {
+                const plannedInfo = plannedDrops.get(d.mail_drop_id);
+                const isFuture = d._isFuture;
+                // Future drops get a subtle accent-tinted background so they read
+                // as "added to plan" rather than late. Selected rows still win.
+                const rowBg = planningMode && planSelected.has(d.mail_drop_id)
+                  ? 'var(--accent-light)'
+                  : isFuture ? 'var(--surface2)' : undefined;
+                // Days Late chip: late=Nd (red), today=Today (warn), future=+Nd (accent)
+                const chipLabel = d.daysLate > 0 ? `${d.daysLate}d` : d.daysLate === 0 ? 'Today' : `+${-d.daysLate}d`;
+                const chipColor = d.daysLate > 0 ? daysLateColor(d.daysLate) : d.daysLate === 0 ? 'var(--status-warn)' : 'var(--accent)';
+                return (
+                <tr key={d.mail_drop_id} style={{ borderTop: '1px solid var(--border)', background: rowBg }}>
                   {/* Planning Mode checkbox */}
                   {planningMode && (
                     <td className="px-2 py-1.5 w-8 text-center">
@@ -536,11 +690,15 @@ export default function LateMailingsPage() {
                   </td>
                   <td className="px-3 py-1.5">
                     <span className="px-1.5 py-0.5 rounded text-[10px] font-medium"
-                      style={{ background: 'var(--surface2)', color: daysLateColor(d.daysLate) }}>
-                      {d.daysLate}d
+                      style={{ background: 'var(--surface2)', color: chipColor }}>
+                      {chipLabel}
                     </span>
                   </td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{ET(d.drop_est_date)}</td>
+                  {/* Planned column — shows planned_date if set */}
+                  <td className="px-3 py-1.5" style={{ color: plannedInfo ? 'var(--accent)' : 'var(--text-muted)', fontWeight: plannedInfo ? 600 : 'normal' }}>
+                    {plannedInfo ? `📅 ${ET(plannedInfo.planned_date)}` : '—'}
+                  </td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
                   <td className="px-3 py-1.5 font-mono" style={{ color: 'var(--text-muted)' }}>
@@ -580,7 +738,8 @@ export default function LateMailingsPage() {
                     {fmt$(d.runningTotal)}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -611,6 +770,15 @@ export default function LateMailingsPage() {
               </p>
             </div>
             <button
+              onClick={() => setSavePlanModal({ date: today })}
+              style={{
+                padding: '8px 16px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                background: 'var(--status-ok)', border: 'none', color: '#fff', fontWeight: 600,
+                whiteSpace: 'nowrap',
+              }}>
+              💾 Save Plan
+            </button>
+            <button
               onClick={() => {
                 const rows = selectedDrops.map(d => ({
                   'Est Date':   d.drop_est_date || '',
@@ -633,6 +801,70 @@ export default function LateMailingsPage() {
           </div>
         );
       })()}
+
+      {/* ── Save Plan date picker modal ───────────────────────────────────── */}
+      {savePlanModal && (
+        <div
+          onClick={() => setSavePlanModal(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 9999,
+          }}>
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 10,
+              padding: '20px 24px',
+              width: 340,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+            }}>
+            <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>
+              💾 Save Plan
+            </p>
+            <p style={{ margin: '0 0 14px', fontSize: 12, color: 'var(--text-muted)' }}>
+              Set the plan date for {planSelected.size} selected drop{planSelected.size !== 1 ? 's' : ''}. If a drop already has a plan date, it will be overwritten.
+            </p>
+            <label style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Plan date</label>
+            <input
+              type="date"
+              value={savePlanModal.date}
+              min={today}
+              onChange={e => setSavePlanModal({ date: e.target.value })}
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                background: 'var(--surface2)', border: '1px solid var(--border)',
+                borderRadius: 6, padding: '8px 10px', fontSize: 13,
+                color: 'var(--text-primary)', outline: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setSavePlanModal(null)}
+                style={{
+                  padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                  background: 'var(--surface2)', border: '1px solid var(--border)',
+                  color: 'var(--text-secondary)',
+                }}>
+                Cancel
+              </button>
+              <button
+                onClick={() => savePlan(savePlanModal.date)}
+                disabled={!savePlanModal.date || savePlanModal.date < today}
+                style={{
+                  padding: '6px 14px', borderRadius: 6, fontSize: 13,
+                  cursor: (!savePlanModal.date || savePlanModal.date < today) ? 'not-allowed' : 'pointer',
+                  background: 'var(--status-ok)', border: 'none', color: '#fff', fontWeight: 600,
+                  opacity: (!savePlanModal.date || savePlanModal.date < today) ? 0.5 : 1,
+                }}>
+                Save 💾
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Hot Job hover tooltip ─────────────────────────────────────────── */}
       {hotTooltip && (() => {

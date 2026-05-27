@@ -120,6 +120,8 @@ export default function CashflowPage() {
   const [hotJobModal, setHotJobModal] = useState(null);      // null | { drop } — popup for setting reason
   const [hotTooltip, setHotTooltip] = useState(null);        // null | { dropId, x, y } — hover card
   const [hotClearConfirm, setHotClearConfirm] = useState(null); // null | { drop } — confirm removal
+  const [plannedDrops, setPlannedDrops] = useState(new Map()); // mail_drop_id → planned_date
+  const [plannedTooltip, setPlannedTooltip] = useState(null);  // null | { dropId, x, y } — clock hover card
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUserEmail(data?.user?.email || ''));
@@ -178,6 +180,13 @@ export default function CashflowPage() {
     const hotMap = new Map();
     for (const h of (hotData || [])) hotMap.set(h.mail_drop_id, { reason: h.reason, set_by: h.set_by, set_at: h.set_at });
 
+    // Load planned drops — drives the clock icon in the fire emoji column
+    const { data: plannedData } = await supabase
+      .from('planned_drops')
+      .select('mail_drop_id, planned_date, planned_by');
+    const plannedMap = new Map();
+    for (const p of (plannedData || [])) plannedMap.set(p.mail_drop_id, { planned_date: p.planned_date, planned_by: p.planned_by });
+
     setTransactions(txns || []);
     setDrops(dropsWithoutLdp);
     setProjectedDeposits(projData || []);
@@ -185,6 +194,7 @@ export default function CashflowPage() {
     setCustomerTerms(termsMap);
     setEpsDeductedMap(epsMap);
     setHotJobs(hotMap);
+    setPlannedDrops(plannedMap);
     setLoading(false);
   }, []);
 
@@ -1007,7 +1017,7 @@ export default function CashflowPage() {
                           <table className="w-full text-xs">
                             <thead style={{ background: 'var(--surface)' }}>
                               <tr>
-                                <th className="px-2 py-1.5 w-7" />
+                                <th className="px-2 py-1.5" style={{ minWidth: 44 }} />
                                 {['Customer', 'Product', 'Drop ID', 'Status', r.isLateMail ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag'].filter(Boolean).map(h => (
                                   <th key={h} className="text-left px-3 py-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>{h}</th>
                                 ))}
@@ -1017,20 +1027,29 @@ export default function CashflowPage() {
                               {r.drops.map((d, di) => {
                                 const isHot = hotJobs.has(d.mail_drop_id);
                                 const hotInfo = hotJobs.get(d.mail_drop_id);
+                                const plannedInfo = plannedDrops.get(d.mail_drop_id);
                                 return (
                                 <tr key={d.mail_drop_id || di} style={{
                                   background: di % 2 === 0 ? 'transparent' : 'var(--surface)',
                                   borderTop: '1px solid var(--border)',
                                 }}>
-                                  <td className="px-2 py-1.5 w-7 text-center">
+                                  <td className="px-2 py-1.5 text-center" style={{ whiteSpace: 'nowrap', minWidth: 44 }}>
                                     <button
                                       onClick={e => { e.stopPropagation(); isHot ? setHotClearConfirm({ drop: d }) : setHotJobModal({ drop: d }); }}
                                       title={isHot ? undefined : 'Mark as hot job'}
                                       onMouseEnter={e => isHot && setHotTooltip({ dropId: d.mail_drop_id, x: e.clientX, y: e.clientY })}
                                       onMouseMove={e => isHot && setHotTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
                                       onMouseLeave={() => setHotTooltip(null)}
-                                      style={{ fontSize: 14, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', filter: isHot ? 'none' : 'grayscale(1) opacity(0.35)', padding: 0 }}
+                                      style={{ fontSize: 14, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', filter: isHot ? 'none' : 'grayscale(1) opacity(0.35)', padding: 0, verticalAlign: 'middle' }}
                                     >🔥</button>
+                                    {plannedInfo && (
+                                      <span
+                                        onMouseEnter={e => setPlannedTooltip({ dropId: d.mail_drop_id, x: e.clientX, y: e.clientY })}
+                                        onMouseMove={e => setPlannedTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
+                                        onMouseLeave={() => setPlannedTooltip(null)}
+                                        style={{ fontSize: 13, lineHeight: 1, marginLeft: 3, cursor: 'default', verticalAlign: 'middle' }}
+                                      >⏰</span>
+                                    )}
                                   </td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
@@ -1253,7 +1272,7 @@ export default function CashflowPage() {
                                   <table className="w-full text-xs">
                                     <thead style={{ background: 'var(--surface2)' }}>
                                       <tr>
-                                        <th className="px-2 py-1.5 w-7" />
+                                        <th className="px-2 py-1.5" style={{ minWidth: 44 }} />
                                         {['Customer', 'Product', 'Drop ID', 'Status', dayKey === 'past-due' ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag'].filter(Boolean).map(h => (
                                           <th key={h} className="text-left px-3 py-1.5 font-medium"
                                             style={{ color: 'var(--text-muted)' }}>{h}</th>
@@ -1264,20 +1283,29 @@ export default function CashflowPage() {
                                       {dayDrops.map((d, di) => {
                                         const isHot = hotJobs.has(d.mail_drop_id);
                                         const hotInfo = hotJobs.get(d.mail_drop_id);
+                                        const plannedInfo = plannedDrops.get(d.mail_drop_id);
                                         return (
                                         <tr key={d.mail_drop_id || di} style={{
                                           background: di % 2 === 0 ? 'transparent' : 'var(--surface2)',
                                           borderTop: '1px solid var(--border)',
                                         }}>
-                                          <td className="px-2 py-1.5 w-7 text-center">
+                                          <td className="px-2 py-1.5 text-center" style={{ whiteSpace: 'nowrap', minWidth: 44 }}>
                                             <button
                                               onClick={e => { e.stopPropagation(); isHot ? setHotClearConfirm({ drop: d }) : setHotJobModal({ drop: d }); }}
                                               title={isHot ? undefined : 'Mark as hot job'}
                                               onMouseEnter={e => isHot && setHotTooltip({ dropId: d.mail_drop_id, x: e.clientX, y: e.clientY })}
                                               onMouseMove={e => isHot && setHotTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
                                               onMouseLeave={() => setHotTooltip(null)}
-                                              style={{ fontSize: 14, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', filter: isHot ? 'none' : 'grayscale(1) opacity(0.35)', padding: 0 }}
+                                              style={{ fontSize: 14, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', filter: isHot ? 'none' : 'grayscale(1) opacity(0.35)', padding: 0, verticalAlign: 'middle' }}
                                             >🔥</button>
+                                            {plannedInfo && (
+                                              <span
+                                                onMouseEnter={e => setPlannedTooltip({ dropId: d.mail_drop_id, x: e.clientX, y: e.clientY })}
+                                                onMouseMove={e => setPlannedTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
+                                                onMouseLeave={() => setPlannedTooltip(null)}
+                                                style={{ fontSize: 13, lineHeight: 1, marginLeft: 3, cursor: 'default', verticalAlign: 'middle' }}
+                                              >⏰</span>
+                                            )}
                                           </td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
@@ -1864,6 +1892,39 @@ export default function CashflowPage() {
               </>
             ) : (
               <p style={{ margin: 0, color: 'var(--text-muted)', fontStyle: 'italic' }}>No reason provided</p>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ── Planned Drop hover tooltip ────────────────────────────────────── */}
+      {plannedTooltip && (() => {
+        const info = plannedDrops.get(plannedTooltip.dropId);
+        if (!info) return null;
+        return (
+          <div style={{
+            position: 'fixed',
+            left: plannedTooltip.x + 14,
+            top: plannedTooltip.y - 12,
+            zIndex: 9998,
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            padding: '10px 14px',
+            fontSize: 12,
+            boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+            pointerEvents: 'none',
+            minWidth: 160,
+            maxWidth: 260,
+          }}>
+            <p style={{ margin: '0 0 6px', fontWeight: 700, color: 'var(--text-primary)', fontSize: 13 }}>⏰ Planned Drop</p>
+            <p style={{ margin: '0 0 2px', color: 'var(--text-muted)', fontSize: 11 }}>Planned for</p>
+            <p style={{ margin: '0 0 6px', color: 'var(--accent)', fontWeight: 600 }}>{ET(info.planned_date)}</p>
+            {info.planned_by && (
+              <>
+                <p style={{ margin: '0 0 2px', color: 'var(--text-muted)', fontSize: 11 }}>By</p>
+                <p style={{ margin: 0, color: 'var(--text-secondary)' }}>{info.planned_by}</p>
+              </>
             )}
           </div>
         );
