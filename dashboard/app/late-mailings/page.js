@@ -83,6 +83,7 @@ export default function LateMailingsPage() {
   const [transactions, setTransactions] = useState([]);
   const [customerTerms, setCustomerTerms] = useState({});
   const [epsDeductedMap, setEpsDeductedMap] = useState({});
+  const [hotJobs, setHotJobs] = useState(new Set());         // Set<mail_drop_id> currently hot
   const [loading, setLoading] = useState(true);
   const [sortKey, setSortKey] = useState('daysLate');
   const [sortDir, setSortDir] = useState('desc');
@@ -137,10 +138,18 @@ export default function LateMailingsPage() {
       }
     }
 
+    // Load currently-hot drops for read-only fire emoji display
+    const { data: hotData } = await supabase
+      .from('hot_jobs')
+      .select('mail_drop_id')
+      .eq('is_hot', true);
+    const hotSet = new Set((hotData || []).map(h => h.mail_drop_id));
+
     setTransactions(txns || []);
     setDrops(deduped);
     setCustomerTerms(termsMap);
     setEpsDeductedMap(epsMap);
+    setHotJobs(hotSet);
     setLoading(false);
   }, [today]);
 
@@ -413,6 +422,8 @@ export default function LateMailingsPage() {
           <table className="w-full text-xs">
             <thead style={{ background: 'var(--surface2)', color: 'var(--text-secondary)' }}>
               <tr>
+                {/* Fire emoji column — read-only, not sortable */}
+                <th className="px-2 py-2 w-8" />
                 {[
                   { key: 'daysLate',           label: 'Days Late',  align: 'left' },
                   { key: 'drop_est_date',      label: 'Est Date',   align: 'left' },
@@ -448,13 +459,21 @@ export default function LateMailingsPage() {
             <tbody>
               {sortedRowsWithRunning.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
+                  <td colSpan={12} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
                     No late drops. 🎉
                   </td>
                 </tr>
               )}
               {sortedRowsWithRunning.map(d => (
                 <tr key={d.mail_drop_id} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td className="px-2 py-1.5 w-8 text-center">
+                    {hotJobs.has(d.mail_drop_id) && (
+                      <span
+                        title={`Hot job — flagged on Cashflow tab`}
+                        style={{ fontSize: 14, lineHeight: 1, cursor: 'default' }}
+                      >🔥</span>
+                    )}
+                  </td>
                   <td className="px-3 py-1.5">
                     <span className="px-1.5 py-0.5 rounded text-[10px] font-medium"
                       style={{ background: 'var(--surface2)', color: daysLateColor(d.daysLate) }}>

@@ -116,6 +116,8 @@ export default function CashflowPage() {
   const [expandedBillingRows, setExpandedBillingRows] = useState({});
   const [epsDeductedMap, setEpsDeductedMap] = useState({}); // mail_drop_id → transaction_number (already charged to EPS)
   const [activeDrawer, setActiveDrawer] = useState(null);   // null | 'balance' | 'postage' | 'pastdue' | 'deposits' — KPI drilldown drawer
+  const [hotJobs, setHotJobs] = useState(new Map());         // mail_drop_id → { reason, set_by, set_at }
+  const [hotJobModal, setHotJobModal] = useState(null);      // null | { drop } — popup for setting reason
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUserEmail(data?.user?.email || ''));
@@ -166,12 +168,21 @@ export default function CashflowPage() {
     // don't hit our EPS, so they shouldn't appear anywhere in cashflow views.
     const dropsWithoutLdp = [...seenDrops.values()].filter(d => !isLdpMailMethod(d));
 
+    // Load hot jobs — only currently-hot rows, keyed by mail_drop_id
+    const { data: hotData } = await supabase
+      .from('hot_jobs')
+      .select('mail_drop_id, reason, set_by, set_at')
+      .eq('is_hot', true);
+    const hotMap = new Map();
+    for (const h of (hotData || [])) hotMap.set(h.mail_drop_id, { reason: h.reason, set_by: h.set_by, set_at: h.set_at });
+
     setTransactions(txns || []);
     setDrops(dropsWithoutLdp);
     setProjectedDeposits(projData || []);
     setProjectedDebits(debitData || []);
     setCustomerTerms(termsMap);
     setEpsDeductedMap(epsMap);
+    setHotJobs(hotMap);
     setLoading(false);
   }, []);
 
@@ -186,6 +197,45 @@ export default function CashflowPage() {
     });
     return sorted[0]?.ending_balance ?? 0;
   }, [transactions]);
+
+  // ── Hot Job helpers ──────────────────────────────────────────────────────────
+  // Called when user clicks a grey fire to open the "why is this hot?" popup.
+  // Called when user clicks a colored fire to immediately clear the hot status.
+  const setHotJob = async (drop, reason) => {
+    const now = new Date().toISOString();
+    const { error } = await supabase
+      .from('hot_jobs')
+      .upsert({ mail_drop_id: drop.mail_drop_id, reason, set_by: userEmail, set_at: now, is_hot: true, cleared_by: null, cleared_at: null }, { onConflict: 'mail_drop_id' });
+    if (error) { console.error('hot_jobs upsert failed:', error.message); return; }
+    await supabase.from('notifications').insert({
+      event_type: 'hot_job_set',
+      title: `🔥 Hot Job flagged — Drop ${drop.mail_drop_id}`,
+      body: `${drop.customer_name || drop.mail_drop_id}${reason ? ` — "${reason}"` : ''} flagged as hot by ${userEmail || 'unknown'}`,
+      severity: 'warning',
+      source: 'hot_jobs',
+      data_json: { mail_drop_id: drop.mail_drop_id, reason, set_by: userEmail },
+    });
+    setHotJobs(prev => { const m = new Map(prev); m.set(drop.mail_drop_id, { reason, set_by: userEmail, set_at: now }); return m; });
+  };
+
+  const clearHotJob = async (drop) => {
+    const now = new Date().toISOString();
+    const { error } = await supabase
+      .from('hot_jobs')
+      .update({ is_hot: false, cleared_by: userEmail, cleared_at: now })
+      .eq('mail_drop_id', drop.mail_drop_id);
+    if (error) { console.error('hot_jobs clear failed:', error.message); return; }
+    await supabase.from('notifications').insert({
+      event_type: 'hot_job_cleared',
+      title: `Hot Job cleared — Drop ${drop.mail_drop_id}`,
+      body: `${drop.customer_name || drop.mail_drop_id} removed from hot list by ${userEmail || 'unknown'}`,
+      severity: 'info',
+      source: 'hot_jobs',
+      data_json: { mail_drop_id: drop.mail_drop_id, cleared_by: userEmail },
+    });
+    setHotJobs(prev => { const m = new Map(prev); m.delete(drop.mail_drop_id); return m; });
+  };
+  // ────────────────────────────────────────────────────────────────────────────
 
   // LDP Postcard postage: only applies when DAL [SUBMITTED] + OUTSOURCED or PRODUCTION drop status
   // effectivePostage imported from ../../lib/postage — shared across pages
@@ -954,17 +1004,28 @@ export default function CashflowPage() {
                           <table className="w-full text-xs">
                             <thead style={{ background: 'var(--surface)' }}>
                               <tr>
+                                <th className="px-2 py-1.5 w-7" />
                                 {['Customer', 'Product', 'Drop ID', 'Status', r.isLateMail ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag'].filter(Boolean).map(h => (
                                   <th key={h} className="text-left px-3 py-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>{h}</th>
                                 ))}
                               </tr>
                             </thead>
                             <tbody>
-                              {r.drops.map((d, di) => (
+                              {r.drops.map((d, di) => {
+                                const isHot = hotJobs.has(d.mail_drop_id);
+                                const hotInfo = hotJobs.get(d.mail_drop_id);
+                                return (
                                 <tr key={d.mail_drop_id || di} style={{
                                   background: di % 2 === 0 ? 'transparent' : 'var(--surface)',
                                   borderTop: '1px solid var(--border)',
                                 }}>
+                                  <td className="px-2 py-1.5 w-7 text-center">
+                                    <button
+                                      onClick={() => isHot ? clearHotJob(d) : setHotJobModal({ drop: d })}
+                                      title={isHot ? `Hot: ${hotInfo?.reason || '(no reason)'}\nClick to remove` : 'Mark as hot job'}
+                                      style={{ fontSize: 14, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', filter: isHot ? 'none' : 'grayscale(1) opacity(0.35)', padding: 0 }}
+                                    >🔥</button>
+                                  </td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}><OspreyDropLink id={d.mail_drop_id} /></td>
@@ -981,7 +1042,8 @@ export default function CashflowPage() {
                                     {d._epsTransactionNumber && <span className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--status-ok-bg)', color: 'var(--status-ok)', border: '1px solid var(--status-ok)' }}>EPS {d._epsTransactionNumber}</span>}
                                   </td>
                                 </tr>
-                              ))}
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -1185,6 +1247,7 @@ export default function CashflowPage() {
                                   <table className="w-full text-xs">
                                     <thead style={{ background: 'var(--surface2)' }}>
                                       <tr>
+                                        <th className="px-2 py-1.5 w-7" />
                                         {['Customer', 'Product', 'Drop ID', 'Status', dayKey === 'past-due' ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag'].filter(Boolean).map(h => (
                                           <th key={h} className="text-left px-3 py-1.5 font-medium"
                                             style={{ color: 'var(--text-muted)' }}>{h}</th>
@@ -1192,11 +1255,21 @@ export default function CashflowPage() {
                                       </tr>
                                     </thead>
                                     <tbody>
-                                      {dayDrops.map((d, di) => (
+                                      {dayDrops.map((d, di) => {
+                                        const isHot = hotJobs.has(d.mail_drop_id);
+                                        const hotInfo = hotJobs.get(d.mail_drop_id);
+                                        return (
                                         <tr key={d.mail_drop_id || di} style={{
                                           background: di % 2 === 0 ? 'transparent' : 'var(--surface2)',
                                           borderTop: '1px solid var(--border)',
                                         }}>
+                                          <td className="px-2 py-1.5 w-7 text-center">
+                                            <button
+                                              onClick={() => isHot ? clearHotJob(d) : setHotJobModal({ drop: d })}
+                                              title={isHot ? `Hot: ${hotInfo?.reason || '(no reason)'}\nClick to remove` : 'Mark as hot job'}
+                                              style={{ fontSize: 14, lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', filter: isHot ? 'none' : 'grayscale(1) opacity(0.35)', padding: 0 }}
+                                            >🔥</button>
+                                          </td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}><OspreyDropLink id={d.mail_drop_id} /></td>
@@ -1213,7 +1286,8 @@ export default function CashflowPage() {
                                             {d._epsTransactionNumber && <span className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--status-ok-bg)', color: 'var(--status-ok)', border: '1px solid var(--status-ok)' }}>EPS {d._epsTransactionNumber}</span>}
                                           </td>
                                         </tr>
-                                      ))}
+                                        );
+                                      })}
                                     </tbody>
                                   </table>
                                 )}
@@ -1678,6 +1752,72 @@ export default function CashflowPage() {
                   </table>
                 )
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Hot Job reason modal ──────────────────────────────────────────── */}
+      {hotJobModal && (
+        <div
+          onClick={() => setHotJobModal(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 9999,
+          }}>
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 10,
+              padding: '20px 24px',
+              width: 360,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+            }}>
+            <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>
+              🔥 Mark as Hot Job
+            </p>
+            <p style={{ margin: '0 0 14px', fontSize: 12, color: 'var(--text-muted)' }}>
+              {hotJobModal.drop.customer_name || hotJobModal.drop.mail_drop_id} — Drop {hotJobModal.drop.mail_drop_id}
+            </p>
+            <textarea
+              autoFocus
+              placeholder="Why is this hot? (optional)"
+              id="hot-job-reason"
+              rows={3}
+              defaultValue=""
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                background: 'var(--surface2)', border: '1px solid var(--border)',
+                borderRadius: 6, padding: '8px 10px', fontSize: 13,
+                color: 'var(--text-primary)', resize: 'vertical',
+                outline: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setHotJobModal(null)}
+                style={{
+                  padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                  background: 'var(--surface2)', border: '1px solid var(--border)',
+                  color: 'var(--text-secondary)',
+                }}>
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const reason = document.getElementById('hot-job-reason')?.value?.trim() || '';
+                  setHotJob(hotJobModal.drop, reason);
+                  setHotJobModal(null);
+                }}
+                style={{
+                  padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                  background: 'var(--accent)', border: 'none', color: '#fff', fontWeight: 600,
+                }}>
+                Save 🔥
+              </button>
             </div>
           </div>
         </div>
