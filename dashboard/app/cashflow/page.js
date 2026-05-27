@@ -683,6 +683,7 @@ export default function CashflowPage() {
   };
 
   return (
+    <>
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>Cashflow & EPS</h1>
@@ -1023,7 +1024,7 @@ export default function CashflowPage() {
                                 }}>
                                   <td className="px-2 py-1.5 w-7 text-center">
                                     <button
-                                      onClick={() => isHot ? setHotClearConfirm({ drop: d }) : setHotJobModal({ drop: d })}
+                                      onClick={e => { e.stopPropagation(); isHot ? setHotClearConfirm({ drop: d }) : setHotJobModal({ drop: d }); }}
                                       title={isHot ? undefined : 'Mark as hot job'}
                                       onMouseEnter={e => isHot && setHotTooltip({ dropId: d.mail_drop_id, x: e.clientX, y: e.clientY })}
                                       onMouseMove={e => isHot && setHotTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
@@ -1762,6 +1763,8 @@ export default function CashflowPage() {
         </div>
       )}
 
+    </div>{/* end space-y-6 */}
+
       {/* ── Hot Job reason modal ──────────────────────────────────────────── */}
       {hotJobModal && (
         <div
@@ -1910,6 +1913,6 @@ export default function CashflowPage() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
