@@ -117,7 +117,7 @@ export default function LateMailingsPage() {
       // cap how far back to look, since old stalled drops are exactly what
       // this page is supposed to surface.
       supabase.from('osprey_mail_drops')
-        .select('mail_drop_id, order_id, customer_id, customer_name, product_category, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, actual_postage, mail_method, mail_drop_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id')
+        .select('mail_drop_id, order_id, customer_id, customer_name, product_category, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, actual_postage, mail_method, mail_drop_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id, mail_location')
         .in('order_status', ACTIVE_ORDER_STATUSES)
         .eq('is_live_status', true)
         .lt('drop_est_date', today)
@@ -385,6 +385,7 @@ export default function LateMailingsPage() {
       'Drop Status': d.drop_status || '',
       'Order ID': d.order_id || '',
       'Mail Drop ID': d.mail_drop_id,
+      'Mail Location': d.mail_location || '',
     }));
     exportToCSV(rows, `late-mailings-${today}`);
   }
@@ -657,12 +658,18 @@ export default function LateMailingsPage() {
                   title="Cumulative postage top-down in the current sort order. Final row = total Postage to Catch Up.">
                   Running Total
                 </th>
+                {/* Mail Location — far-right, sortable */}
+                <th onClick={() => toggleSort('mail_location')}
+                  className="px-3 py-2 font-medium text-left cursor-pointer select-none"
+                  style={{ color: sortKey === 'mail_location' ? 'var(--accent)' : 'var(--text-secondary)' }}>
+                  Mail Location{sortKey === 'mail_location' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                </th>
               </tr>
             </thead>
             <tbody>
               {sortedRowsWithRunning.length === 0 && (
                 <tr>
-                  <td colSpan={planningMode ? 14 : 13} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
+                  <td colSpan={planningMode ? 15 : 14} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
                     No late drops. 🎉
                   </td>
                 </tr>
@@ -762,6 +769,9 @@ export default function LateMailingsPage() {
                   <td className="px-3 py-1.5 text-right"
                     style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
                     {fmt$(d.runningTotal)}
+                  </td>
+                  <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>
+                    {d.mail_location || '—'}
                   </td>
                 </tr>
                 );

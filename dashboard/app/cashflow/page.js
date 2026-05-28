@@ -137,7 +137,7 @@ export default function CashflowPage() {
 
     const [{ data: txns }, { data: dropData }, { data: projData }, { data: debitData }] = await Promise.all([
       supabase.from('usps_transactions').select('*').gte('transaction_date', since90).order('transaction_date', { ascending: true }),
-      supabase.from('osprey_mail_drops').select('mail_drop_id, order_id, customer_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, actual_postage, mail_method, mail_drop_amount, production_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id').in('order_status', ['DAL [SUBMITTED]', 'DIGITAL READY', 'DIGITAL [STAGING]', 'OUTSOURCED', 'OUTSOURCED [STAGING]']).eq('is_live_status', true).lte('drop_est_date', in8w),
+      supabase.from('osprey_mail_drops').select('mail_drop_id, order_id, customer_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, actual_postage, mail_method, mail_drop_amount, production_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id, mail_location').in('order_status', ['DAL [SUBMITTED]', 'DIGITAL READY', 'DIGITAL [STAGING]', 'OUTSOURCED', 'OUTSOURCED [STAGING]']).eq('is_live_status', true).lte('drop_est_date', in8w),
       supabase.from('projected_deposits').select('*').eq('is_active', true).order('deposit_date'),
       supabase.from('projected_debits').select('*').eq('is_active', true).order('debit_date'),
     ]);
@@ -1037,7 +1037,7 @@ export default function CashflowPage() {
                             <thead style={{ background: 'var(--surface)' }}>
                               <tr>
                                 <th className="px-2 py-1.5" style={{ minWidth: 44 }} />
-                                {['Customer', 'Product', 'Drop ID', 'Status', r.isLateMail ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag'].filter(Boolean).map(h => (
+                                {['Customer', 'Product', 'Drop ID', 'Status', r.isLateMail ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag', 'Mail Location'].filter(Boolean).map(h => (
                                   <th key={h} className="text-left px-3 py-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>{h}</th>
                                 ))}
                               </tr>
@@ -1086,6 +1086,7 @@ export default function CashflowPage() {
                                     {d._pastDue && <span className="font-medium mr-1" style={{ color: 'var(--status-warn)' }}>PAST DUE</span>}
                                     {d._epsTransactionNumber && <span className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--status-ok-bg)', color: 'var(--status-ok)', border: '1px solid var(--status-ok)' }}>EPS {d._epsTransactionNumber}</span>}
                                   </td>
+                                  <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.mail_location || '—'}</td>
                                 </tr>
                                 );
                               })}
@@ -1293,7 +1294,7 @@ export default function CashflowPage() {
                                     <thead style={{ background: 'var(--surface2)' }}>
                                       <tr>
                                         <th className="px-2 py-1.5" style={{ minWidth: 44 }} />
-                                        {['Customer', 'Product', 'Drop ID', 'Status', dayKey === 'past-due' ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag'].filter(Boolean).map(h => (
+                                        {['Customer', 'Product', 'Drop ID', 'Status', dayKey === 'past-due' ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag', 'Mail Location'].filter(Boolean).map(h => (
                                           <th key={h} className="text-left px-3 py-1.5 font-medium"
                                             style={{ color: 'var(--text-muted)' }}>{h}</th>
                                         ))}
@@ -1343,6 +1344,7 @@ export default function CashflowPage() {
                                             {d._pastDue && <span className="font-medium mr-1" style={{ color: 'var(--status-warn)' }}>PAST DUE</span>}
                                             {d._epsTransactionNumber && <span className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--status-ok-bg)', color: 'var(--status-ok)', border: '1px solid var(--status-ok)' }}>EPS {d._epsTransactionNumber}</span>}
                                           </td>
+                                          <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.mail_location || '—'}</td>
                                         </tr>
                                         );
                                       })}
