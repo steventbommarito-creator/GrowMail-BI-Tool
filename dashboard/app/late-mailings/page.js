@@ -824,6 +824,7 @@ export default function LateMailingsPage() {
                   'Drop ID':    d.mail_drop_id || '',
                   'Qty':        d.mail_drop_quantity ?? '',
                   'Postage':    (d.rawPostage || 0).toFixed(2),
+                  'Mail Location': d.mail_location || '',
                 }));
                 exportToCSV(rows, `late-mailings-plan-${new Date().toISOString().split('T')[0]}`);
               }}
