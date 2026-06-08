@@ -43,17 +43,28 @@ export default function IntegrationsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Persist API URL + API Key.
+  // Persist API URL + API Key. We auto-prepend https:// if the user typed a
+  // bare hostname like "acme.myfreshworks.com/crm/sales" — Node fetch needs a
+  // protocol or it errors with "Failed to parse URL". Strip trailing slashes
+  // too so we don't end up with double-slashes when paths get appended.
+  const normalizeUrl = (s) => {
+    const t = String(s || '').trim().replace(/\/+$/, '');
+    if (!t) return '';
+    return /^https?:\/\//i.test(t) ? t : `https://${t}`;
+  };
   const save = async () => {
     setSaving(true);
+    const cleanedUrl = normalizeUrl(apiUrl);
     const { error } = await supabase.from('crm_settings').update({
-      api_url: apiUrl.trim() || null,
+      api_url: cleanedUrl || null,
       api_key: apiKey.trim() || null,
       updated_at: new Date().toISOString(),
       updated_by: userEmail || null,
     }).eq('id', 1);
     setSaving(false);
     if (error) { alert(`Save failed: ${error.message}`); return; }
+    // Reflect the normalized URL back in the input so the user sees the fix
+    if (cleanedUrl !== apiUrl) setApiUrl(cleanedUrl);
     await supabase.from('crm_events').insert({
       event_type: 'settings_changed', status: 'info',
       title: 'CRM settings updated',
