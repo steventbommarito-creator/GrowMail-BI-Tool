@@ -36,6 +36,7 @@ export default function Nav() {
     { href: '/cashflow', label: 'Cashflow' },
     { href: '/actuals', label: 'Actuals' },
     { href: '/hygiene', label: 'Data Hygiene' },
+    { href: '/crm', label: 'CRM Integration' },
   ];
 
   // Load last sync times on mount
