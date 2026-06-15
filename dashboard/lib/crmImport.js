@@ -407,8 +407,13 @@ async function pushBatch(supabase, importId, count, ctx) {
           errors.push(`Account ${extId}: ${e.message}`);
           continue;
         }
-        // Attach sales_account_id and queue for bulk contact push below
+        // Link each contact to the resolved FS account. In Freshsales Suite,
+        // contacts associate to sales accounts via an array of {id, is_primary}
+        // objects (the "sales_accounts" relationship), NOT a flat
+        // sales_account_id field. We set both for forward compatibility
+        // in case the bulk endpoint accepts either; FS ignores the unknown.
         for (const v of vs) {
+          v.normalized.sales_accounts = [{ id: fsAccountId, is_primary: true }];
           v.normalized.sales_account_id = fsAccountId;
           v.row.fs_account_id_pending = fsAccountId;
         }

@@ -206,10 +206,15 @@ async function getBulkJob(supabase, jobId) {
 // default + custom fields available for that entity type. Used by the Imports
 // page mapping UI so the user picks real FS field names, not invented ones.
 
-async function getContactFields(supabase) { return call(supabase, 'GET', '/settings/forms/contact'); }
-async function getAccountFields(supabase) { return call(supabase, 'GET', '/settings/forms/sales_account'); }
-async function getDealFields(supabase)    { return call(supabase, 'GET', '/settings/forms/deal'); }
-async function getTaskFields(supabase)    { return call(supabase, 'GET', '/settings/forms/task'); }
+// Field-schema endpoints. FS returns a flat { fields: [...] } object with all
+// default + custom fields. The actual paths (verified against the FS docs)
+// are /api/settings/{entity}/fields, NOT /forms/{entity} which I guessed and
+// silently 404'd. Tasks live under sales_activities since FS treats Tasks
+// as one variety of sales activity.
+async function getContactFields(supabase) { return call(supabase, 'GET', '/settings/contacts/fields'); }
+async function getAccountFields(supabase) { return call(supabase, 'GET', '/settings/sales_accounts/fields'); }
+async function getDealFields(supabase)    { return call(supabase, 'GET', '/settings/deals/fields'); }
+async function getTaskFields(supabase)    { return call(supabase, 'GET', '/settings/sales_activities/fields'); }
 
 module.exports = {
   // basic

@@ -44,28 +44,23 @@ export async function GET(_request, { params }) {
   return NextResponse.json({ ok: true, fields });
 }
 
-// FS form definitions vary in shape across entity types. This is a defensive
-// flattener: try the common locations, fall back to a flat array.
+// FS /api/settings/{entity}/fields returns { fields: [...] } — a flat array
+// of every default + custom field. We expose all of them as mappable, with
+// the group (contact|account|deal|task) prefixed to the label so the user
+// can tell which entity each field belongs to in the merged dropdown.
 function flattenForm(data, group) {
-  const out = [];
-  const form = data?.form || data;
-  const sections = form?.sections || form?.field_sections || [];
-  // Sectioned shape
-  for (const s of sections) {
-    for (const f of (s.fields || [])) push(f);
-  }
-  // Flat shape
-  for (const f of (form?.fields || [])) push(f);
-  return out;
-
-  function push(f) {
-    if (!f?.name) return;
-    out.push({
+  const list = data?.fields || data?.form?.fields || [];
+  return list
+    // Skip relationship/lookup placeholders that aren't directly mappable
+    // — auto_complete = a contact/account picker, not a value-carrying field
+    .filter(f => f?.name && f.type !== 'auto_complete')
+    .map(f => ({
       name: f.name,
       label: f.label || f.name,
       type: f.type || 'string',
       required: !!f.required,
       group,
-    });
-  }
+      // expose dropdown choices so a future "preview value" UI can validate
+      choices: Array.isArray(f.choices) ? f.choices.map(c => c.value || c.label).filter(Boolean) : null,
+    }));
 }
