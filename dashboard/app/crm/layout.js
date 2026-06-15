@@ -12,6 +12,7 @@ const SUB_NAV = [
   { href: '/crm',                label: 'Overview' },
   { href: '/crm/integrations',   label: 'Integrations' },
   { href: '/crm/opportunities',  label: 'Opportunities' },
+  { href: '/crm/imports',        label: 'Imports' },
   { href: '/crm/leads',          label: 'Leads' },
   { href: '/crm/accounts',       label: 'Accounts' },
 ];
