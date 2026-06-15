@@ -21,17 +21,31 @@ export async function GET(request) {
   const { data: imports, error } = await q;
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
 
-  // Bulk-fetch row counts per import + status. Group in memory.
+  // Per-import per-status counts via head-only count queries. The earlier
+  // approach selected status+import_id for every row across every import
+  // and tallied in JS — that hit the 1k row cap (and would be wasteful at
+  // 87k-row scale). With count='exact',head=true we get true COUNT(*)
+  // per (import, status) with no row payload. KEY_STATUSES limits this to
+  // the ones we actually display on the list cards.
   const ids = (imports || []).map(i => i.id);
-  let counts = {};
+  const KEY_STATUSES = ['pending', 'sent', 'failed'];
+  const counts = {};
   if (ids.length) {
-    const { data: rows } = await supabase.from('crm_import_rows')
-      .select('import_id, status')
-      .in('import_id', ids);
-    for (const r of rows || []) {
-      if (!counts[r.import_id]) counts[r.import_id] = { pending: 0, sent: 0, failed: 0, validation_failed: 0, skipped: 0 };
-      counts[r.import_id][r.status] = (counts[r.import_id][r.status] || 0) + 1;
+    const queries = [];
+    for (const id of ids) {
+      counts[id] = { pending: 0, sent: 0, failed: 0 };
+      for (const status of KEY_STATUSES) {
+        queries.push(
+          supabase.from('crm_import_rows')
+            .select('id', { count: 'exact', head: true })
+            .eq('import_id', id)
+            .eq('status', status)
+            .then(r => ({ id, status, count: r?.count ?? 0 }))
+        );
+      }
     }
+    const results = await Promise.all(queries);
+    for (const r of results) counts[r.id][r.status] = r.count;
   }
 
   const result = (imports || []).map(i => ({ ...i, counts: counts[i.id] || {} }));

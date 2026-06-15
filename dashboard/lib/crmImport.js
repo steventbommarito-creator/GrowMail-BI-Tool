@@ -309,16 +309,31 @@ async function pushBatch(supabase, importId, count, ctx) {
   if (bErr) throw new Error(`Failed to open batch: ${bErr.message}`);
   const batchId = batch.id;
 
-  // 2. Claim N pending rows. Two-step: pull ids, mark them with this batch_id.
-  //    We then update normalized_json + status per row as we process.
-  const { data: pendingRows } = await supabase
-    .from('crm_import_rows')
-    .select('*')
-    .eq('import_id', importId)
-    .eq('status', 'pending')
-    .order('row_index', { ascending: true })
-    .limit(count);
-  const claimedIds = (pendingRows || []).map(r => r.id);
+  // 2. Claim N pending rows. PostgREST caps any single response at ~1000
+  //    rows, so we paginate to handle larger pushes (87k contacts, etc.).
+  //    Three phases:
+  //      a) Page through pending IDs in 1k chunks until we've collected `count`
+  //      b) Single bulk-update to claim them all (batch_id + status='validating')
+  //      c) Page through to fetch the full row data for processing
+  //    Doing IDs-first avoids the race where reading pages of pending rows
+  //    while updating them shifts what counts as 'pending' mid-iteration.
+  const PAGE = 1000;
+  const claimedIds = [];
+  let offset = 0;
+  while (claimedIds.length < count) {
+    const need = Math.min(PAGE, count - claimedIds.length);
+    const { data: idPage } = await supabase
+      .from('crm_import_rows')
+      .select('id')
+      .eq('import_id', importId)
+      .eq('status', 'pending')
+      .order('row_index', { ascending: true })
+      .range(offset, offset + need - 1);
+    if (!idPage?.length) break;
+    claimedIds.push(...idPage.map(r => r.id));
+    if (idPage.length < need) break;
+    offset += need;
+  }
   if (claimedIds.length === 0) {
     await supabase.from('crm_import_batches').update({
       status: 'complete', actual_size: 0,
@@ -327,7 +342,25 @@ async function pushBatch(supabase, importId, count, ctx) {
     }).eq('id', batchId);
     return { sent: 0, failed: 0, skipped: 0, batchId };
   }
-  await supabase.from('crm_import_rows').update({ batch_id: batchId, status: 'validating' }).in('id', claimedIds);
+
+  // Phase b — claim every ID we collected in one bulk update.
+  await supabase.from('crm_import_rows')
+    .update({ batch_id: batchId, status: 'validating' })
+    .in('id', claimedIds);
+
+  // Phase c — fetch the full row data for the claimed IDs, in 1k chunks
+  // because .in() can hit the same row cap.
+  const pendingRows = [];
+  for (let i = 0; i < claimedIds.length; i += PAGE) {
+    const chunk = claimedIds.slice(i, i + PAGE);
+    const { data } = await supabase
+      .from('crm_import_rows')
+      .select('*')
+      .in('id', chunk);
+    if (data) pendingRows.push(...data);
+  }
+  // Keep ordering stable for deterministic processing
+  pendingRows.sort((a, b) => a.row_index - b.row_index);
 
   // 3. Normalize each row and split into FS-bound chunks
   const normResults = pendingRows.map(r => {

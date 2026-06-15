@@ -18,16 +18,25 @@ export async function GET(request, { params }) {
   const limit  = Math.min(parseInt(searchParams.get('limit') || '200', 10), 1000);
   const status = searchParams.get('status'); // optional filter
 
-  const [{ data: imp }, batchesRes, countsRes] = await Promise.all([
+  // Per-status counts — separate head-only count queries instead of fetching
+  // all status values and tallying in JS. The fetch approach hit the 1k
+  // PostgREST row cap, so a 2k import showed only 1k pending. With
+  // count='exact', head=true we get a true COUNT(*) and no row payload.
+  const STATUSES = ['pending', 'sent', 'failed', 'validation_failed', 'validating', 'skipped'];
+  const countOne = (status) => supabase
+    .from('crm_import_rows')
+    .select('id', { count: 'exact', head: true })
+    .eq('import_id', id)
+    .eq('status', status);
+
+  const [{ data: imp }, batchesRes, ...countResults] = await Promise.all([
     supabase.from('crm_imports').select('*').eq('id', id).maybeSingle(),
     supabase.from('crm_import_batches').select('*').eq('import_id', id).order('started_at', { ascending: false }).limit(20),
-    supabase.from('crm_import_rows').select('status').eq('import_id', id),
+    ...STATUSES.map(countOne),
   ]);
   if (!imp) return NextResponse.json({ ok: false, error: 'Import not found' }, { status: 404 });
 
-  // Roll up row counts by status
-  const counts = { pending: 0, sent: 0, failed: 0, validation_failed: 0, validating: 0, skipped: 0 };
-  for (const r of countsRes.data || []) counts[r.status] = (counts[r.status] || 0) + 1;
+  const counts = Object.fromEntries(STATUSES.map((s, i) => [s, countResults[i]?.count ?? 0]));
 
   // Page through rows
   let q = supabase.from('crm_import_rows')
