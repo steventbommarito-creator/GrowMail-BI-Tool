@@ -217,8 +217,15 @@ function normalizeRow(raw, mapping, type, schemaIndex) {
 
   // Per-type required-field validation. Match the unique_identifier used in
   // the bulk_upsert calls — without these we can't dedup, FS rejects the row.
+  //
+  // EMAIL FIELD NAME GOTCHA: the FS field name is `emails` (it's a
+  // group_field that can hold multiple addresses), not `email`. The user's
+  // mapping correctly targets `emails` because that's what shows up in our
+  // schema dropdown — so the value lives under normalized.emails. Accept
+  // either key here so we don't false-positive "email is required" on every
+  // row when the mapping is actually correct.
   if (type === 'contacts_accounts' || type === 'leads') {
-    if (!normalized.email) errors.push('email is required');
+    if (!normalized.email && !normalized.emails) errors.push('email is required');
   }
   if (type === 'opportunities') {
     // We use cf_order_id as the FS unique identifier (see bulkUpsertDeals).
@@ -227,6 +234,22 @@ function normalizeRow(raw, mapping, type, schemaIndex) {
   }
   if (type === 'tasks') {
     if (!normalized.title) errors.push('title is required');
+  }
+
+  // FS group_field shaping. emails / phone_numbers / mobile_number_list / etc.
+  // require an array of {value, is_primary} on bulk_upsert; a bare string is
+  // rejected. We always emit a single-element array with the parsed value as
+  // primary. If the user maps multiple Excel columns to the same group_field,
+  // (which is rare) the last one wins because the engine writes them as
+  // string into normalized[fsField] before this step — fine for v1.
+  const groupFieldShapers = {
+    emails:       v => [{ value: String(v), is_primary: true }],
+    phone_numbers: v => [{ value: String(v), is_primary: true }],
+  };
+  for (const [field, shape] of Object.entries(groupFieldShapers)) {
+    if (normalized[field] != null && !Array.isArray(normalized[field])) {
+      normalized[field] = shape(normalized[field]);
+    }
   }
 
   return { normalized, errors };
