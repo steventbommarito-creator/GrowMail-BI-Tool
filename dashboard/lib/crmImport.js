@@ -149,7 +149,7 @@ function normalizeCurrency(v) {
  * field is missing or fails validation — caller sets the row to
  * 'validation_failed' so it never hits FS.
  */
-function normalizeRow(raw, mapping, type) {
+function normalizeRow(raw, mapping, type, schemaIndex) {
   const normalized = {};
   const errors = [];
 
@@ -188,8 +188,31 @@ function normalizeRow(raw, mapping, type) {
       // Even after normalization, a value could become null (e.g. unparseable
       // date or invalid currency). Same rule: skip rather than wipe.
       if (cleaned == null || cleaned === '') continue;
+
+      // Dropdown text→ID resolution. If this field is a dropdown
+      // (or multi_select_dropdown) in the FS schema, convert the label to
+      // the choice ID — FS rejects payloads where dropdowns carry text. On
+      // unresolved values we record an error so the row goes to
+      // validation_failed and the user can fix the spreadsheet.
+      if (schemaIndex) {
+        const r = resolveDropdownValue(fsField, cleaned, schemaIndex);
+        if (!r.ok) { errors.push(r.error); continue; }
+        cleaned = r.value;
+      }
       normalized[fsField] = cleaned;
     }
+  }
+
+  // ── Status → Lifecycle auto-derive ─────────────────────────────────────
+  // FS doesn't enforce the lifecycle/status pairing at the API layer, so when
+  // the user mapped a column to Status (contact_status_id) but did NOT also
+  // map a column to lifecycle_stage_id, we look up the status's parent
+  // lifecycle in the schema index (from /selector/contact_statuses) and set
+  // it ourselves. Mapping just Status → "Qualified" now correctly lands the
+  // contact in the "Sales Qualified Lead" lifecycle.
+  if (schemaIndex && normalized.contact_status_id != null && normalized.lifecycle_stage_id == null) {
+    const lifecycle = schemaIndex.statusToLifecycle.get(normalized.contact_status_id);
+    if (lifecycle != null) normalized.lifecycle_stage_id = lifecycle;
   }
 
   // Per-type required-field validation. Match the unique_identifier used in
@@ -277,6 +300,115 @@ async function pollForResultId(supabase, jobId, entityKey) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// ─── FS schema index — text→ID resolution for dropdown fields ──────────────
+//
+// FS dropdown / multi_select_dropdown fields require the numeric choice ID on
+// upsert, not the human label. Excel rows have the label ("Qualified"), so
+// before pushing we need to translate. This builds a per-field choice map
+// keyed by lowercased label so the lookup is case-insensitive and tolerant
+// of weird spreadsheet capitalization.
+//
+// For contact imports it also pulls the contact_statuses selector, which
+// gives us each status's parent lifecycle_stage_id. Used by pushBatch to
+// auto-set lifecycle_stage_id when the user mapped Status but not Lifecycle.
+
+async function buildSchemaIndex(supabase, importType) {
+  // dropdownChoices: Map<fs_field_name, Map<label_lowercase, choice_id>>
+  // dropdownLabels:  Map<fs_field_name, comma_separated_label_list> (for errors)
+  // multiSelectFields: Set<fs_field_name>  — types that expect an array of IDs
+  // statusToLifecycle: Map<status_id, lifecycle_id> (contact imports only)
+  const index = {
+    dropdownChoices:   new Map(),
+    dropdownLabels:    new Map(),
+    multiSelectFields: new Set(),
+    statusToLifecycle: new Map(),
+  };
+
+  const addFields = (fields, group) => {
+    for (const f of fields || []) {
+      if (f.type !== 'dropdown' && f.type !== 'multi_select_dropdown') continue;
+      if (!Array.isArray(f.choices) || f.choices.length === 0) continue;
+      const m = new Map();
+      const labels = [];
+      for (const c of f.choices) {
+        const label = (c.value || c.name || '').toString();
+        const id    = c.id;
+        if (label && id != null) {
+          m.set(label.toLowerCase().trim(), id);
+          labels.push(label);
+        }
+      }
+      // namespace by field name; if a contact and account share a field name
+      // (rare but possible), the group prefix isn't needed because the engine
+      // already keys by fs_field_name which is unique within an entity.
+      index.dropdownChoices.set(f.name, m);
+      index.dropdownLabels.set(f.name, labels.join(', '));
+      if (f.type === 'multi_select_dropdown') index.multiSelectFields.add(f.name);
+    }
+  };
+
+  if (importType === 'contacts_accounts' || importType === 'leads') {
+    const [c, a, statuses] = await Promise.all([
+      fw.getContactFields(supabase),
+      importType === 'contacts_accounts' ? fw.getAccountFields(supabase) : Promise.resolve({ ok: true, data: { fields: [] } }),
+      fw.listContactStatuses(supabase),
+    ]);
+    if (c.ok) addFields(c.data?.fields, 'contact');
+    if (a.ok) addFields(a.data?.fields, 'account');
+    if (statuses.ok) {
+      for (const s of statuses.data?.contact_statuses || []) {
+        if (s.id != null && s.lifecycle_stage_id != null) {
+          index.statusToLifecycle.set(s.id, s.lifecycle_stage_id);
+        }
+      }
+    }
+  } else if (importType === 'opportunities') {
+    const d = await fw.getDealFields(supabase);
+    if (d.ok) addFields(d.data?.fields, 'deal');
+  } else if (importType === 'tasks') {
+    const t = await fw.getTaskFields(supabase);
+    if (t.ok) addFields(t.data?.fields, 'task');
+  }
+  return index;
+}
+
+// Resolve a single value against the choice map for a given field. Returns
+// { ok: true, value } on hit, { ok: false, error } on miss. Multi-select
+// values can be a comma- or semicolon-separated string; each part is resolved
+// independently.
+function resolveDropdownValue(fsField, rawValue, index) {
+  const choices = index.dropdownChoices.get(fsField);
+  if (!choices) return { ok: true, value: rawValue };   // not a dropdown — pass through
+  const isMulti = index.multiSelectFields.has(fsField);
+
+  const resolveOne = (s) => {
+    const key = String(s).toLowerCase().trim();
+    if (!key) return null;
+    return choices.has(key) ? choices.get(key) : undefined;  // undefined = not found
+  };
+
+  if (isMulti) {
+    const parts = String(rawValue).split(/[,;]/).map(s => s.trim()).filter(Boolean);
+    const ids = [];
+    const unresolved = [];
+    for (const p of parts) {
+      const r = resolveOne(p);
+      if (r === undefined) unresolved.push(p);
+      else if (r !== null) ids.push(r);
+    }
+    if (unresolved.length) {
+      return { ok: false, error: `${fsField}: "${unresolved.join(', ')}" not in choices (${index.dropdownLabels.get(fsField)})` };
+    }
+    return { ok: true, value: ids };
+  }
+  // Single-select
+  const r = resolveOne(rawValue);
+  if (r === undefined) {
+    return { ok: false, error: `${fsField}: "${rawValue}" not in choices (${index.dropdownLabels.get(fsField)})` };
+  }
+  return { ok: true, value: r };
+}
+
 // ─── pushBatch — the user-triggered "Send N rows" operation ────────────────
 
 /**
@@ -362,9 +494,15 @@ async function pushBatch(supabase, importId, count, ctx) {
   // Keep ordering stable for deterministic processing
   pendingRows.sort((a, b) => a.row_index - b.row_index);
 
+  // Build the FS schema index (dropdown choice maps + status→lifecycle table)
+  // once for the whole batch. Cheap — one API call per entity type — and the
+  // result is reused for every row's normalization. Without this, dropdown
+  // mappings ship raw text and FS rejects every row.
+  const schemaIndex = await buildSchemaIndex(supabase, imp.import_type);
+
   // 3. Normalize each row and split into FS-bound chunks
   const normResults = pendingRows.map(r => {
-    const nr = normalizeRow(r.raw_json, mapping, imp.import_type);
+    const nr = normalizeRow(r.raw_json, mapping, imp.import_type, schemaIndex);
     return { row: r, ...nr };
   });
 

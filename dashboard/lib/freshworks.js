@@ -216,6 +216,14 @@ async function getAccountFields(supabase) { return call(supabase, 'GET', '/setti
 async function getDealFields(supabase)    { return call(supabase, 'GET', '/settings/deals/fields'); }
 async function getTaskFields(supabase)    { return call(supabase, 'GET', '/settings/sales_activities/fields'); }
 
+// Lifecycle-stage / contact-status relationship. We use this in the import
+// engine to auto-derive lifecycle_stage_id from a mapped contact_status_id —
+// FS doesn't enforce the pairing on the API, so we have to set both.
+// Response: { contact_statuses: [{ id, name, lifecycle_stage_id, ... }, ...] }
+async function listContactStatuses(supabase) {
+  return call(supabase, 'GET', '/selector/contact_statuses');
+}
+
 module.exports = {
   // basic
   testConnection,
@@ -234,6 +242,7 @@ module.exports = {
   getContactFields,
   getAccountFields,
   getDealFields,
+  listContactStatuses,
   getTaskFields,
   // internals
   call,
