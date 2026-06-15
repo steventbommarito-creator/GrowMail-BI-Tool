@@ -5,7 +5,7 @@
 // progress bar (sent / total) and quick stats. New Upload button opens a
 // modal: pick file + type, submit, navigate to the detail page on success.
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 
 const TYPES = [
@@ -160,6 +160,25 @@ function UploadModal({ type, onClose, onUploaded }) {
   const [type2, setType2] = useState(type);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef(null);
+
+  // Reject anything that isn't an Excel or CSV — same constraint as the
+  // bucket's allowedMimeTypes. We check by extension because some browsers
+  // mis-report the MIME for .xlsx as application/octet-stream.
+  const acceptFile = (f) => {
+    if (!f) return;
+    const ok = /\.(xlsx|xls|csv)$/i.test(f.name);
+    if (!ok) { setError('Only .xlsx, .xls, or .csv files are supported'); return; }
+    setError(null);
+    setFile(f);
+  };
+  const onDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    const f = e.dataTransfer?.files?.[0];
+    acceptFile(f);
+  };
 
   const submit = async () => {
     if (!file) { setError('Pick a file first'); return; }
@@ -206,9 +225,58 @@ function UploadModal({ type, onClose, onUploaded }) {
           </div>
           <div>
             <label className="text-xs block mb-1" style={{ color: 'var(--text-muted)' }}>File</label>
-            <input type="file" accept=".xlsx,.xls,.csv"
-              onChange={e => setFile(e.target.files?.[0] || null)}
-              style={{ width: '100%', fontSize: 13, color: 'var(--text-primary)' }} />
+
+            {/* Hidden native input — driven by the drop zone's click handler */}
+            <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv"
+              onChange={e => acceptFile(e.target.files?.[0] || null)}
+              style={{ display: 'none' }} />
+
+            {/* Drop zone — drag over to highlight, click anywhere to browse,
+                shows the chosen file name (with a Change button) once selected. */}
+            <div
+              onClick={() => !file && fileInputRef.current?.click()}
+              onDragEnter={e => { e.preventDefault(); setDragOver(true); }}
+              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={e => { e.preventDefault(); setDragOver(false); }}
+              onDrop={onDrop}
+              style={{
+                border: `2px dashed ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
+                background: dragOver ? 'var(--accent-light)' : 'var(--surface2)',
+                borderRadius: 8,
+                padding: file ? '14px 16px' : '28px 16px',
+                textAlign: 'center',
+                cursor: file ? 'default' : 'pointer',
+                transition: 'border-color 0.15s, background 0.15s, padding 0.15s',
+              }}>
+              {file ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                  <div style={{ textAlign: 'left', minWidth: 0, flex: 1 }}>
+                    <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)', fontWeight: 600,
+                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {file.name}
+                    </p>
+                    <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>
+                      {(file.size / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} KB
+                    </p>
+                  </div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setFile(null); fileInputRef.current && (fileInputRef.current.value = ''); }}
+                    style={{ padding: '4px 10px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
+                      background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500 }}>
+                    {dragOver ? 'Drop file to upload' : 'Drag and drop your file here'}
+                  </p>
+                  <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>
+                    or <span style={{ color: 'var(--accent)', textDecoration: 'underline' }}>click to browse</span> — .xlsx, .xls, or .csv (up to 50 MB)
+                  </p>
+                </>
+              )}
+            </div>
           </div>
           {error && <p className="text-xs" style={{ color: 'var(--status-critical)' }}>{error}</p>}
         </div>
