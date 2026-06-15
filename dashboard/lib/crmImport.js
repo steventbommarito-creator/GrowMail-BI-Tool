@@ -154,17 +154,30 @@ function normalizeRow(raw, mapping, type) {
   const errors = [];
 
   // Apply column→field mapping with per-field normalization based on fs_field_name.
+  //
+  // DATA-SAFETY RULE: never send null/empty values in the upsert payload. If
+  // the Excel cell is empty, OMIT the field entirely so FS keeps whatever
+  // value it already had. Without this, a re-upload of a partial spreadsheet
+  // would wipe filled-in FS fields on the second pass (FS upsert semantics
+  // are: present-in-payload = overwrite, absent = leave alone). Users who
+  // actually want to clear a field can do so in FS directly.
   for (const [excelCol, fsField] of Object.entries(mapping || {})) {
     if (!fsField || fsField === '__skip__') continue;
     const v = raw[excelCol];
-    if (v == null || v === '') { normalized[fsField] = null; continue; }
+    if (v == null || v === '') continue;   // skip empty cells — preserves existing FS data
 
-    if (/email/i.test(fsField))                 normalized[fsField] = normalizeEmail(v);
-    else if (/phone|mobile/i.test(fsField))     normalized[fsField] = normalizePhone(v);
-    else if (/date|_at$|_on$/i.test(fsField))   normalized[fsField] = parseDate(v);
-    else if (/amount|value|price|revenue/i.test(fsField)) normalized[fsField] = normalizeCurrency(v);
-    else if (typeof v === 'string')             normalized[fsField] = cleanString(v);
-    else                                        normalized[fsField] = v;
+    let cleaned;
+    if (/email/i.test(fsField))                 cleaned = normalizeEmail(v);
+    else if (/phone|mobile/i.test(fsField))     cleaned = normalizePhone(v);
+    else if (/date|_at$|_on$/i.test(fsField))   cleaned = parseDate(v);
+    else if (/amount|value|price|revenue/i.test(fsField)) cleaned = normalizeCurrency(v);
+    else if (typeof v === 'string')             cleaned = cleanString(v);
+    else                                        cleaned = v;
+
+    // Even after normalization, a value could become null (e.g. unparseable
+    // date or invalid currency). Same rule: skip rather than wipe.
+    if (cleaned == null || cleaned === '') continue;
+    normalized[fsField] = cleaned;
   }
 
   // Per-type required-field validation. Match the unique_identifier used in
