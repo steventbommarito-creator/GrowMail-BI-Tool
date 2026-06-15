@@ -42,6 +42,8 @@ export default function ImportDetailPage({ params }) {
   const [pushResult, setPushResult] = useState(null);
   const [schema, setSchema] = useState([]);
   const [schemaLoading, setSchemaLoading] = useState(true);
+  const [showDelete, setShowDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
 
   const load = useCallback(async (statusOverride) => {
@@ -171,6 +173,13 @@ export default function ImportDetailPage({ params }) {
                 style={{ background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text-secondary)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}>
                 Download failed CSV ({fmtN(totalFailed)})
               </a>
+              <button
+                onClick={() => setShowDelete(true)}
+                title={totalSent > 0 ? 'Remove unprocessed rows (sent rows stay as audit)' : 'Delete this import'}
+                className="text-xs px-2 py-1 rounded"
+                style={{ background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--status-critical)', cursor: 'pointer' }}>
+                {totalSent > 0 ? `Remove ${fmtN(totalPending)} unprocessed` : 'Delete import'}
+              </button>
             </div>
           </div>
           {/* Progress bar */}
@@ -350,6 +359,77 @@ export default function ImportDetailPage({ params }) {
           </table>
         </div>
       </div>
+
+      {/* ── Delete-import confirm modal ──────────────────────────────────── */}
+      {showDelete && (
+        <div onClick={() => !deleting && setShowDelete(false)} style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12,
+            padding: '24px 28px', width: 480, maxWidth: '90vw',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+          }}>
+            <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>
+              {totalSent > 0 ? 'Remove unprocessed rows?' : 'Delete this import?'}
+            </p>
+            <p style={{ margin: '0 0 14px', fontSize: 12, color: 'var(--text-muted)' }}>
+              {imp.original_filename || '(no filename)'}
+            </p>
+            {totalSent === 0 ? (
+              <div className="text-sm" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                Nothing has been sent to Freshworks yet. This will fully remove:
+                <ul style={{ margin: '8px 0 0 20px', padding: 0 }}>
+                  <li>The Excel file in storage</li>
+                  <li>All {(imp.total_rows || 0).toLocaleString()} rows</li>
+                  <li>All batches + the import record</li>
+                </ul>
+                <p style={{ margin: '12px 0 0', fontSize: 12, color: 'var(--status-warn)' }}>This cannot be undone.</p>
+              </div>
+            ) : (
+              <div className="text-sm" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                <strong style={{ color: 'var(--status-ok)' }}>{totalSent.toLocaleString()} rows</strong> have already been sent to Freshworks. Those will be <strong>kept</strong> as audit.
+                <div style={{ marginTop: 10, padding: '10px 12px', background: 'var(--surface2)', borderRadius: 6, border: '1px solid var(--border)' }}>
+                  <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>This action will:</p>
+                  <ul style={{ margin: '6px 0 0 20px', padding: 0, fontSize: 13 }}>
+                    <li>Remove <strong>{totalPending.toLocaleString()}</strong> unprocessed rows</li>
+                    <li>Keep {totalSent.toLocaleString()} sent + {totalFailed.toLocaleString()} failed rows</li>
+                    <li>Keep the Excel file and the import record</li>
+                  </ul>
+                </div>
+                <p style={{ margin: '12px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
+                  To fully delete the import including sent records, do it from Freshworks directly.
+                </p>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 18 }}>
+              <button onClick={() => setShowDelete(false)} disabled={deleting}
+                style={{ padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                  background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+                Cancel
+              </button>
+              <button onClick={async () => {
+                setDeleting(true);
+                try {
+                  const res = await fetch(`/api/crm/imports/${id}`, { method: 'DELETE' });
+                  const j = await res.json();
+                  if (!j.ok) { alert(`Delete failed: ${j.error}`); setDeleting(false); return; }
+                  if (j.mode === 'partial') { setShowDelete(false); setDeleting(false); await load(); }
+                  else { router.push('/crm/imports'); }
+                } catch (e) {
+                  alert(`Delete failed: ${e.message}`); setDeleting(false);
+                }
+              }} disabled={deleting}
+                style={{ padding: '6px 18px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                  background: 'var(--status-critical)', border: 'none', color: '#fff', fontWeight: 600,
+                  opacity: deleting ? 0.5 : 1 }}>
+                {deleting ? 'Deleting…' : totalSent > 0 ? 'Remove Unprocessed' : 'Delete Import'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

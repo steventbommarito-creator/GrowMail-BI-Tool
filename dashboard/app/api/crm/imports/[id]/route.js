@@ -56,18 +56,69 @@ export async function GET(request, { params }) {
   });
 }
 
+// Smart delete: behavior depends on whether anything has been sent to FS.
+//   • Nothing sent → full nuke: drop the Excel file from storage, delete the
+//     import row, cascade-delete every row + batch.
+//   • Some sent  → partial delete: only remove pending + validating rows
+//     (the unprocessed ones). Keep the import record, the sent/failed/skipped
+//     rows, and the original file — so the user retains an audit trail of
+//     what made it to FS and what failed.
+//   • ?force=true → always full nuke regardless of sent count (escape hatch).
 export async function DELETE(request, { params }) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ ok: false, error: 'Not authenticated' }, { status: 401 });
 
   const { id } = await params;
-  const { data: imp } = await supabase.from('crm_imports').select('storage_path').eq('id', id).maybeSingle();
-  if (imp?.storage_path) {
-    await supabase.storage.from('crm-imports').remove([imp.storage_path]).catch(() => {});
+  const { searchParams } = new URL(request.url);
+  const force = searchParams.get('force') === 'true';
+
+  const { data: imp } = await supabase.from('crm_imports').select('storage_path, original_filename, import_type').eq('id', id).maybeSingle();
+  if (!imp) return NextResponse.json({ ok: false, error: 'Import not found' }, { status: 404 });
+
+  // Count sent rows to decide which path to take.
+  const { count: sentCount } = await supabase.from('crm_import_rows')
+    .select('id', { count: 'exact', head: true })
+    .eq('import_id', id)
+    .eq('status', 'sent');
+
+  // ── Full delete ──────────────────────────────────────────────────────────
+  if (force || (sentCount || 0) === 0) {
+    if (imp.storage_path) {
+      await supabase.storage.from('crm-imports').remove([imp.storage_path]).catch(() => {});
+    }
+    // crm_import_rows + crm_import_batches cascade via FK ON DELETE CASCADE.
+    const { error } = await supabase.from('crm_imports').delete().eq('id', id);
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+
+    await supabase.from('crm_events').insert({
+      event_type: 'import_deleted', status: 'info',
+      title: `Import deleted — ${imp.original_filename || id}`,
+      body: `${imp.import_type} import fully removed (no rows had been sent to FS).`,
+      created_by: user.email,
+    });
+    return NextResponse.json({ ok: true, mode: 'full' });
   }
-  // crm_import_rows + crm_import_batches cascade via FK ON DELETE CASCADE.
-  const { error } = await supabase.from('crm_imports').delete().eq('id', id);
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
-  return NextResponse.json({ ok: true });
+
+  // ── Partial delete ──────────────────────────────────────────────────────
+  // Drop pending + validating rows (the unprocessed ones). Keep everything
+  // else so audit history is preserved. The original Excel file stays in
+  // storage — it's the source of the sent records, useful for reference.
+  const { count: removed } = await supabase.from('crm_import_rows')
+    .select('id', { count: 'exact', head: true })
+    .eq('import_id', id)
+    .in('status', ['pending', 'validating']);
+  const { error: delErr } = await supabase.from('crm_import_rows')
+    .delete()
+    .eq('import_id', id)
+    .in('status', ['pending', 'validating']);
+  if (delErr) return NextResponse.json({ ok: false, error: delErr.message }, { status: 500 });
+
+  await supabase.from('crm_events').insert({
+    event_type: 'import_partially_cleared', status: 'info',
+    title: `Unprocessed rows removed — ${imp.original_filename || id}`,
+    body: `${removed ?? 0} pending/validating rows dropped. ${sentCount} sent rows preserved for audit.`,
+    created_by: user.email,
+  });
+  return NextResponse.json({ ok: true, mode: 'partial', removed: removed ?? 0, sent: sentCount });
 }

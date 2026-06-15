@@ -32,6 +32,8 @@ export default function ImportsListPage() {
   const [imports, setImports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // null | { import }
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -95,6 +97,7 @@ export default function ImportsListPage() {
                 <th className="text-right px-4 py-2 font-medium" style={{ color: 'var(--text-muted)' }}>Pending</th>
                 <th className="text-right px-4 py-2 font-medium" style={{ color: 'var(--text-muted)' }}>Failed</th>
                 <th className="text-left px-4 py-2 font-medium" style={{ color: 'var(--text-muted)' }}>Uploaded</th>
+                <th className="px-2 py-2 w-8" />{/* trash column */}
               </tr>
             </thead>
             <tbody>
@@ -139,6 +142,16 @@ export default function ImportsListPage() {
                     <td className="px-4 py-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                       {fmtTS(imp.uploaded_at)}
                     </td>
+                    <td className="px-2 py-2 w-8 text-center">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDeleteConfirm({ import: { ...imp, _sent: sent, _pending: pending, _failed: failed } }); }}
+                        title="Delete import"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 14, lineHeight: 1, padding: '4px 6px' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--status-critical)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)'; }}>
+                        🗑
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -149,6 +162,16 @@ export default function ImportsListPage() {
 
       {showUpload && <UploadModal type={tab} onClose={() => setShowUpload(false)}
         onUploaded={(id) => { setShowUpload(false); router.push(`/crm/imports/${id}`); }} />}
+
+      {deleteConfirm && (
+        <DeleteImportModal
+          target={deleteConfirm.import}
+          onClose={() => setDeleteConfirm(null)}
+          onDeleted={async () => { setDeleteConfirm(null); await load(); }}
+          deleting={deleting}
+          setDeleting={setDeleting}
+        />
+      )}
     </div>
   );
 }
@@ -292,6 +315,93 @@ function UploadModal({ type, onClose, onUploaded }) {
               background: 'var(--accent)', border: 'none', color: '#fff', fontWeight: 600,
               opacity: (uploading || !file) ? 0.5 : 1 }}>
             {uploading ? 'Uploading…' : 'Upload'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Delete-import confirm modal ────────────────────────────────────────────
+// Two behaviors, gated on whether any rows have made it to FS:
+//   • 0 sent  → full delete: storage file + import record + every row/batch
+//   • >0 sent → partial: only the unprocessed (pending/validating) rows go;
+//                the import card stays as audit of what made it to FS.
+// Both paths require explicit confirmation. The same trash button is used
+// either way; the modal text changes based on the state of the import.
+function DeleteImportModal({ target, onClose, onDeleted, deleting, setDeleting }) {
+  const t = target;
+  const hasSent = (t._sent || 0) > 0;
+  const isFull = !hasSent;
+
+  const submit = async () => {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/crm/imports/${t.id}`, { method: 'DELETE' });
+      const j = await res.json();
+      if (!j.ok) { alert(`Delete failed: ${j.error}`); setDeleting(false); return; }
+      await onDeleted();
+    } catch (e) {
+      alert(`Delete failed: ${e.message}`); setDeleting(false);
+    }
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12,
+        padding: '24px 28px', width: 480, maxWidth: '90vw',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+      }}>
+        <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>
+          {isFull ? 'Delete this import?' : 'Remove unprocessed rows?'}
+        </p>
+        <p style={{ margin: '0 0 14px', fontSize: 12, color: 'var(--text-muted)' }}>
+          {t.original_filename || '(no filename)'}
+        </p>
+
+        {isFull ? (
+          <div className="text-sm" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            Nothing has been sent to Freshworks yet. This will fully remove:
+            <ul style={{ margin: '8px 0 0 20px', padding: 0 }}>
+              <li>The Excel file in storage</li>
+              <li>All {(t.total_rows || 0).toLocaleString()} rows</li>
+              <li>All batches + the import record</li>
+            </ul>
+            <p style={{ margin: '12px 0 0', fontSize: 12, color: 'var(--status-warn)' }}>This cannot be undone.</p>
+          </div>
+        ) : (
+          <div className="text-sm" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            <strong style={{ color: 'var(--status-ok)' }}>{(t._sent || 0).toLocaleString()} rows</strong> have already
+            been sent to Freshworks. Those will be <strong>kept</strong> as audit.
+            <div style={{ marginTop: 10, padding: '10px 12px', background: 'var(--surface2)', borderRadius: 6, border: '1px solid var(--border)' }}>
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>This action will:</p>
+              <ul style={{ margin: '6px 0 0 20px', padding: 0, fontSize: 13 }}>
+                <li>Remove <strong>{(t._pending || 0).toLocaleString()}</strong> unprocessed rows (pending/validating)</li>
+                <li>Keep {(t._sent || 0).toLocaleString()} sent + {(t._failed || 0).toLocaleString()} failed rows</li>
+                <li>Keep the Excel file and the import record</li>
+              </ul>
+            </div>
+            <p style={{ margin: '12px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
+              To fully delete the import including sent records, do it from Freshworks directly.
+            </p>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 18 }}>
+          <button onClick={onClose} disabled={deleting}
+            style={{ padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+              background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+            Cancel
+          </button>
+          <button onClick={submit} disabled={deleting}
+            style={{ padding: '6px 18px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+              background: 'var(--status-critical)', border: 'none', color: '#fff', fontWeight: 600,
+              opacity: deleting ? 0.5 : 1 }}>
+            {deleting ? 'Deleting…' : isFull ? 'Delete Import' : 'Remove Unprocessed'}
           </button>
         </div>
       </div>
