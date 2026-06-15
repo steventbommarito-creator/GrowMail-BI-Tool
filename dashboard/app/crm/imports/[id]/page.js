@@ -9,7 +9,7 @@
 //   4. Rows preview: status filter, paginated table, click failed row to see
 //      the error inline. Download Failed CSV link at the top of this section.
 
-import { useEffect, useState, useCallback, use as usePromise } from 'react';
+import { useEffect, useState, useRef, useMemo, useCallback, use as usePromise } from 'react';
 import { useRouter } from 'next/navigation';
 
 const PRESETS = [20, 100, 1000, 'all'];
@@ -92,10 +92,32 @@ export default function ImportDetailPage({ params }) {
     });
   };
 
+  // ── Multi-field mapping helpers ─────────────────────────────────────────
+  // mapping[col] can be a string (old) or array of strings (new). These
+  // helpers always operate on the array form; persistence keeps the array
+  // shape too — the engine accepts either, so old mappings still work.
+  const getMappedFields = (excelCol) => {
+    const v = mapping[excelCol];
+    if (!v) return [];
+    return Array.isArray(v) ? v : [v];
+  };
+  const setMappedFields = async (excelCol, fields) => {
+    const next = { ...mapping };
+    const clean = (fields || []).filter(Boolean).filter(f => f !== '__skip__');
+    if (clean.length === 0) delete next[excelCol];
+    else next[excelCol] = clean;
+    setData(d => ({ ...d, import: { ...d.import, mapping_json: next } }));
+    await fetch(`/api/crm/imports/${id}/mapping`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mapping: next }),
+    });
+  };
+
   // Auto-suggest a default field per Excel column based on a normalized
   // name match. Only applies if the user hasn't set one yet for that column.
   const suggestField = (excelCol) => {
-    if (mapping[excelCol]) return mapping[excelCol];
+    if (mapping[excelCol]) return Array.isArray(mapping[excelCol]) ? mapping[excelCol][0] : mapping[excelCol];
     const norm = excelCol.toLowerCase().replace(/[^a-z]/g, '');
     const hit = schema.find(f => f.name.toLowerCase().replace(/[^a-z]/g, '') === norm);
     return hit ? hit.name : '';
@@ -181,27 +203,20 @@ export default function ImportDetailPage({ params }) {
           <span style={{ color: 'var(--text-muted)' }}>{showMapping ? '▾' : '▸'}</span>
         </button>
         {showMapping && (
-          <div style={{ overflow: 'auto', maxHeight: 360 }}>
+          <div style={{ overflow: 'auto', maxHeight: 480 }}>
             {(imp.excel_columns || []).map(col => {
-              const current = mapping[col] || '';
+              const selected = getMappedFields(col);
+              const suggested = suggestField(col);
               return (
-                <div key={col} className="px-4 py-2 flex items-center justify-between"
-                  style={{ borderBottom: '1px solid var(--border)', gap: 12 }}>
-                  <span className="text-sm font-mono" style={{ color: 'var(--text-primary)' }}>{col}</span>
-                  <select value={current} onChange={e => onMappingChange(col, e.target.value)}
-                    style={{ background: 'var(--surface2)', border: '1px solid var(--border)',
-                      borderRadius: 6, padding: '5px 8px', fontSize: 12,
-                      color: current ? 'var(--text-primary)' : 'var(--text-muted)', minWidth: 240 }}>
-                    <option value="">
-                      {suggestField(col) ? `— Suggested: ${suggestField(col)} —` : '— Skip this column —'}
-                    </option>
-                    {schema.map(f => (
-                      <option key={f.name} value={f.name}>
-                        {f.label}{f.required ? ' *' : ''}{f.group ? ` (${f.group})` : ''}
-                      </option>
-                    ))}
-                    <option value="__skip__">— Skip this column —</option>
-                  </select>
+                <div key={col} className="px-4 py-3"
+                  style={{ borderBottom: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, alignItems: 'start' }}>
+                  <span className="text-sm font-mono" style={{ color: 'var(--text-primary)', paddingTop: 6 }}>{col}</span>
+                  <MappingCombobox
+                    schema={schema}
+                    selected={selected}
+                    suggested={suggested}
+                    onChange={(nextFields) => setMappedFields(col, nextFields)}
+                  />
                 </div>
               );
             })}
@@ -346,6 +361,182 @@ function Stat({ label, value, color }) {
       <p style={{ margin: '2px 0 0', fontSize: 14, fontWeight: 600, color, fontVariantNumeric: 'tabular-nums' }}>
         {(value ?? 0).toLocaleString()}
       </p>
+    </div>
+  );
+}
+
+// ─── Searchable multi-select for column → FS field mapping ───────────────────
+// Typeahead input with a fixed-height dropdown panel so 100+ FS fields stay
+// manageable. Selected fields display as removable chips above the search.
+// Click outside to close. Keyboard: ArrowDown/Up + Enter to pick, Esc to close.
+// Same column can be mapped to multiple FS fields (e.g. Excel "Phone" →
+// {mobile_number, work_number}); engine fans the value out to all targets.
+function MappingCombobox({ schema, selected, suggested, onChange }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(0);                          // highlighted-row index
+  const containerRef = useRef(null);
+  const inputRef = useRef(null);
+
+  // Close when clicking outside.
+  useEffect(() => {
+    const onDoc = (e) => { if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+
+  // Filter to fields not already selected, ranked by best match (label/name
+  // includes query). Case-insensitive. Limit to 200 rows for render perf —
+  // the dropdown itself is scrollable so even more wouldn't help UX.
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const selSet = new Set(selected);
+    const list = schema.filter(f => !selSet.has(f.name));
+    if (!q) return list.slice(0, 200);
+    const scored = [];
+    for (const f of list) {
+      const label = (f.label || '').toLowerCase();
+      const name  = (f.name  || '').toLowerCase();
+      const group = (f.group || '').toLowerCase();
+      let score = -1;
+      if (label.startsWith(q) || name.startsWith(q))  score = 0;        // best — prefix
+      else if (label.includes(q) || name.includes(q)) score = 1;
+      else if (group.includes(q))                      score = 2;
+      if (score >= 0) scored.push([score, f]);
+    }
+    scored.sort((a, b) => a[0] - b[0]);
+    return scored.slice(0, 200).map(p => p[1]);
+  }, [schema, selected, query]);
+
+  // Clamp the highlight when the result list shrinks.
+  useEffect(() => { if (hi >= results.length) setHi(Math.max(0, results.length - 1)); }, [results.length, hi]);
+
+  const addField = (name) => {
+    if (!name || selected.includes(name)) return;
+    onChange([...selected, name]);
+    setQuery('');
+    setHi(0);
+    // Keep focus so the user can add multiple fields in a row.
+    inputRef.current?.focus();
+  };
+  const removeField = (name) => onChange(selected.filter(s => s !== name));
+
+  const onKeyDown = (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setHi(h => Math.min(h + 1, results.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(h - 1, 0)); }
+    else if (e.key === 'Enter')  { e.preventDefault(); if (results[hi]) addField(results[hi].name); }
+    else if (e.key === 'Backspace' && !query && selected.length > 0) { removeField(selected[selected.length - 1]); }
+    else if (e.key === 'Escape') { setOpen(false); }
+  };
+
+  const fieldByName = useMemo(() => {
+    const m = new Map(); for (const f of schema) m.set(f.name, f); return m;
+  }, [schema]);
+
+  const isEmpty = selected.length === 0;
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative', minWidth: 0 }}>
+      {/* Selected chips + inline search */}
+      <div
+        onClick={() => { setOpen(true); inputRef.current?.focus(); }}
+        style={{
+          display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4,
+          background: 'var(--surface2)', border: '1px solid var(--border)',
+          borderRadius: 6, padding: '4px 6px',
+          minHeight: 30, cursor: 'text',
+        }}>
+        {selected.map(name => {
+          const f = fieldByName.get(name);
+          const label = f?.label || name;
+          const group = f?.group;
+          return (
+            <span key={name}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                background: 'var(--accent-light)', color: 'var(--accent)',
+                borderRadius: 4, padding: '2px 4px 2px 7px',
+                fontSize: 11, fontWeight: 600,
+              }}>
+              {label}{group ? <span style={{ fontWeight: 400, opacity: 0.7 }}> ({group})</span> : null}
+              <button onClick={(e) => { e.stopPropagation(); removeField(name); }}
+                title="Remove this mapping"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: 13, lineHeight: 1, padding: '0 3px' }}>×</button>
+            </span>
+          );
+        })}
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={e => { setQuery(e.target.value); setOpen(true); setHi(0); }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+          placeholder={isEmpty
+            ? (suggested ? `Suggested: ${suggested} — type to search…` : 'Search Freshworks fields…')
+            : 'Add another field…'}
+          style={{
+            flex: '1 1 120px', minWidth: 100,
+            background: 'transparent', border: 'none', outline: 'none',
+            fontSize: 12, color: 'var(--text-primary)',
+            padding: '4px 2px',
+          }}
+        />
+      </div>
+
+      {/* Dropdown panel */}
+      {open && (
+        <div
+          style={{
+            position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0,
+            background: 'var(--surface)',
+            border: '1px solid var(--border)', borderRadius: 8,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+            zIndex: 50,
+            maxHeight: 280, overflowY: 'auto',
+          }}>
+          {results.length === 0 ? (
+            <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-muted)' }}>
+              {query ? `No fields match "${query}"` : 'All fields are already mapped'}
+            </div>
+          ) : results.map((f, i) => {
+            const isHi = i === hi;
+            return (
+              <div key={f.name}
+                onMouseEnter={() => setHi(i)}
+                onMouseDown={(e) => { e.preventDefault(); addField(f.name); }}
+                style={{
+                  padding: '6px 12px', cursor: 'pointer', fontSize: 12,
+                  background: isHi ? 'var(--surface2)' : 'transparent',
+                  borderBottom: '1px solid var(--border)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                    {f.label}{f.required ? ' *' : ''}
+                  </span>
+                  {f.name !== f.label && (
+                    <span style={{ color: 'var(--text-muted)', marginLeft: 6, fontFamily: 'monospace', fontSize: 11 }}>
+                      {f.name}
+                    </span>
+                  )}
+                </div>
+                {f.group && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 600,
+                    color: 'var(--text-muted)',
+                    background: 'var(--surface2)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 3, padding: '1px 5px',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {f.group}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

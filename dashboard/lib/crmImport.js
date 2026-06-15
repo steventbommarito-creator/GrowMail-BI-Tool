@@ -161,23 +161,35 @@ function normalizeRow(raw, mapping, type) {
   // would wipe filled-in FS fields on the second pass (FS upsert semantics
   // are: present-in-payload = overwrite, absent = leave alone). Users who
   // actually want to clear a field can do so in FS directly.
-  for (const [excelCol, fsField] of Object.entries(mapping || {})) {
-    if (!fsField || fsField === '__skip__') continue;
+  //
+  // MULTI-FIELD MAPPING: each excel column maps to ONE OR MORE fs fields.
+  // The UI stores the value as an array; old mappings (just a string) are
+  // accepted for backward compat. Same Excel value goes to every target,
+  // each one normalized independently based on its own field name (so a
+  // 'phone' column mapped to both 'mobile_number' and 'work_number' gets
+  // phone-normalized once per destination).
+  for (const [excelCol, mappedValue] of Object.entries(mapping || {})) {
     const v = raw[excelCol];
     if (v == null || v === '') continue;   // skip empty cells — preserves existing FS data
 
-    let cleaned;
-    if (/email/i.test(fsField))                 cleaned = normalizeEmail(v);
-    else if (/phone|mobile/i.test(fsField))     cleaned = normalizePhone(v);
-    else if (/date|_at$|_on$/i.test(fsField))   cleaned = parseDate(v);
-    else if (/amount|value|price|revenue/i.test(fsField)) cleaned = normalizeCurrency(v);
-    else if (typeof v === 'string')             cleaned = cleanString(v);
-    else                                        cleaned = v;
+    // Normalize the mapping shape to an array of field names.
+    const fsFields = Array.isArray(mappedValue) ? mappedValue : [mappedValue];
+    for (const fsField of fsFields) {
+      if (!fsField || fsField === '__skip__') continue;
 
-    // Even after normalization, a value could become null (e.g. unparseable
-    // date or invalid currency). Same rule: skip rather than wipe.
-    if (cleaned == null || cleaned === '') continue;
-    normalized[fsField] = cleaned;
+      let cleaned;
+      if (/email/i.test(fsField))                 cleaned = normalizeEmail(v);
+      else if (/phone|mobile/i.test(fsField))     cleaned = normalizePhone(v);
+      else if (/date|_at$|_on$/i.test(fsField))   cleaned = parseDate(v);
+      else if (/amount|value|price|revenue/i.test(fsField)) cleaned = normalizeCurrency(v);
+      else if (typeof v === 'string')             cleaned = cleanString(v);
+      else                                        cleaned = v;
+
+      // Even after normalization, a value could become null (e.g. unparseable
+      // date or invalid currency). Same rule: skip rather than wipe.
+      if (cleaned == null || cleaned === '') continue;
+      normalized[fsField] = cleaned;
+    }
   }
 
   // Per-type required-field validation. Match the unique_identifier used in
