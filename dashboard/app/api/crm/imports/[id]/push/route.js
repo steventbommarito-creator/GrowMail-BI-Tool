@@ -4,7 +4,7 @@
 
 import { NextResponse } from 'next/server';
 import { createClient } from '../../../../../../lib/supabaseServer';
-const importer = require('../../../../../../../lib/crmImport');
+const importer = require('../../../../../../lib/crmImport');
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;        // up to 5 min for a single batch push

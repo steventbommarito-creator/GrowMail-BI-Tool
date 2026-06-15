@@ -4,7 +4,7 @@
 
 import { NextResponse } from 'next/server';
 import { createClient } from '../../../../lib/supabaseServer';
-const fw = require('../../../../../lib/freshworks');
+const fw = require('../../../../lib/freshworks');
 
 export async function GET(request) {
   const supabase = await createClient();

@@ -5,7 +5,7 @@
 
 import { NextResponse } from 'next/server';
 import { createClient } from '../../../../lib/supabaseServer';
-const sync = require('../../../../../lib/crmSync');
+const sync = require('../../../../lib/crmSync');
 
 export async function POST() {
   const supabase = await createClient();

@@ -9,7 +9,7 @@
 
 import { NextResponse } from 'next/server';
 import { createClient } from '../../../../../lib/supabaseServer';
-const importer = require('../../../../../../lib/crmImport');
+const importer = require('../../../../../lib/crmImport');
 
 export const runtime = 'nodejs';        // xlsx + buffers need Node, not Edge
 export const maxDuration = 60;          // parsing 100k+ rows can take time
