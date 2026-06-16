@@ -149,7 +149,7 @@ function normalizeCurrency(v) {
  * field is missing or fails validation — caller sets the row to
  * 'validation_failed' so it never hits FS.
  */
-function normalizeRow(raw, mapping, type, schemaIndex, valueMappings) {
+function normalizeRow(raw, mapping, type, schemaIndex, valueMappings, staticValues) {
   const normalized = {};
   const errors = [];
 
@@ -198,13 +198,31 @@ function normalizeRow(raw, mapping, type, schemaIndex, valueMappings) {
     for (const fsField of fsFields) {
       if (!fsField || fsField === '__skip__') continue;
 
+      // Pick the normalization strategy. Prefer the FS field's actual type
+      // when we have it (from the schema index) so we don't, for example,
+      // try to parse a text-typed cf_create_date column whose values are
+      // raw strings the user wants preserved as-is.
+      const fsType = schemaIndex?.fieldTypes?.get(fsField);
       let cleaned;
-      if (/email/i.test(fsField))                 cleaned = normalizeEmail(v);
-      else if (/phone|mobile/i.test(fsField))     cleaned = normalizePhone(v);
-      else if (/date|_at$|_on$/i.test(fsField))   cleaned = parseDate(v);
+      if (fsType === 'date' || fsType === 'datetime') {
+        cleaned = parseDate(v);
+      } else if (fsType === 'checkbox') {
+        // FS checkboxes need booleans. Excel often stores 0/1, "yes"/"no",
+        // "true"/"false" — coerce defensively. Treat blank/0/no/false as false,
+        // everything else as true.
+        if (typeof v === 'boolean') cleaned = v;
+        else {
+          const s = String(v).trim().toLowerCase();
+          cleaned = !(s === '' || s === '0' || s === 'false' || s === 'no' || s === 'n');
+        }
+      } else if (fsType === 'number') {
+        const n = typeof v === 'number' ? v : Number(String(v).replace(/[$,\s]/g, ''));
+        cleaned = Number.isFinite(n) ? n : null;
+      } else if (/email/i.test(fsField))                 cleaned = normalizeEmail(v);
+      else if (/phone|mobile/i.test(fsField))            cleaned = normalizePhone(v);
       else if (/amount|value|price|revenue/i.test(fsField)) cleaned = normalizeCurrency(v);
-      else if (typeof v === 'string')             cleaned = cleanString(v);
-      else                                        cleaned = v;
+      else if (typeof v === 'string')                    cleaned = cleanString(v);
+      else                                               cleaned = v;
 
       // Even after normalization, a value could become null (e.g. unparseable
       // date or invalid currency). Same rule: skip rather than wipe.
@@ -265,15 +283,45 @@ function normalizeRow(raw, mapping, type, schemaIndex, valueMappings) {
     if (!normalized.title) errors.push('title is required');
   }
 
-  // FS group_field shaping. emails / phone_numbers / mobile_number_list / etc.
-  // require an array of {value, is_primary} on bulk_upsert; a bare string is
-  // rejected. We always emit a single-element array with the parsed value as
-  // primary. If the user maps multiple Excel columns to the same group_field,
-  // (which is rare) the last one wins because the engine writes them as
-  // string into normalized[fsField] before this step — fine for v1.
+  // ── Static values: ALWAYS override whatever the per-row mapping produced ──
+  // Applies last so the user's "every row in this batch is Sales Qualified
+  // Lead" rule beats anything the Excel column would have set. For dropdown
+  // fields, the saved value is the label — we resolve it through the same
+  // text→ID path the per-row mapping uses, including value-mapping rules.
+  if (staticValues && schemaIndex) {
+    for (const [fsField, raw] of Object.entries(staticValues)) {
+      if (raw == null || raw === '') { delete normalized[fsField]; continue; }
+      let val = raw;
+      // Apply the value mapping if a rule exists for THIS field's static value
+      // (rare but harmless to support — keeps everything composable).
+      // We synthesize a fake excel column key so the existing helper works.
+      const fakeCol = `__static__:${fsField}`;
+      const vm = applyValueMap(fakeCol, fsField, val);
+      if (vm.skip) { delete normalized[fsField]; continue; }
+      if (vm.override) val = vm.value;
+      // Dropdown resolution (text → id) — same as the per-row path.
+      if (schemaIndex.dropdownChoices.has(fsField)) {
+        const r = resolveDropdownValue(fsField, val, schemaIndex);
+        if (!r.ok) { errors.push(`static[${fsField}]: ${r.error}`); continue; }
+        val = r.value;
+      }
+      // Checkbox / number static values: coerce same as per-row path.
+      const fsType = schemaIndex.fieldTypes.get(fsField);
+      if (fsType === 'checkbox' && typeof val !== 'boolean') {
+        const s = String(val).trim().toLowerCase();
+        val = !(s === '' || s === '0' || s === 'false' || s === 'no' || s === 'n');
+      }
+      normalized[fsField] = val;
+    }
+  }
+
+  // FS group_field shaping. emails / phone_numbers expect arrays of objects
+  // on bulk_upsert; a bare string is rejected. We also include the type
+  // subfield (Work for emails, Other for phone_numbers) because some FS
+  // tenants reject the items without it.
   const groupFieldShapers = {
-    emails:       v => [{ value: String(v), is_primary: true }],
-    phone_numbers: v => [{ value: String(v), is_primary: true }],
+    emails:        v => [{ value: String(v), is_primary: true, email_type: 'Work' }],
+    phone_numbers: v => [{ value: String(v), is_primary: true, phone_type: 'Other' }],
   };
   for (const [field, shape] of Object.entries(groupFieldShapers)) {
     if (normalized[field] != null && !Array.isArray(normalized[field])) {
@@ -365,19 +413,29 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // auto-set lifecycle_stage_id when the user mapped Status but not Lifecycle.
 
 async function buildSchemaIndex(supabase, importType) {
-  // dropdownChoices: Map<fs_field_name, Map<label_lowercase, choice_id>>
-  // dropdownLabels:  Map<fs_field_name, comma_separated_label_list> (for errors)
+  // dropdownChoices:   Map<fs_field_name, Map<label_lowercase, choice_id>>
+  // dropdownLabels:    Map<fs_field_name, comma_separated_label_list> (for errors)
   // multiSelectFields: Set<fs_field_name>  — types that expect an array of IDs
   // statusToLifecycle: Map<status_id, lifecycle_id> (contact imports only)
+  // fieldTypes:        Map<fs_field_name, fs_type_string>
+  //                    Used to gate per-type normalization: only parse dates
+  //                    when the FS field is actually a date/datetime type,
+  //                    only coerce booleans when it's a checkbox, etc. The
+  //                    field-name regex our engine used to use was too greedy
+  //                    (any field with 'date' in the name got date-parsed,
+  //                    even text-typed cf_* columns that store raw strings).
   const index = {
     dropdownChoices:   new Map(),
     dropdownLabels:    new Map(),
     multiSelectFields: new Set(),
     statusToLifecycle: new Map(),
+    fieldTypes:        new Map(),
   };
 
   const addFields = (fields, group) => {
     for (const f of fields || []) {
+      // Record the FS type for every field so the normalizer can branch on it.
+      if (f.name && f.type) index.fieldTypes.set(f.name, f.type);
       if (f.type !== 'dropdown' && f.type !== 'multi_select_dropdown') continue;
       if (!Array.isArray(f.choices) || f.choices.length === 0) continue;
       const m = new Map();
@@ -554,10 +612,12 @@ async function pushBatch(supabase, importId, count, ctx) {
 
   // Per-import value mappings: { excel_col: { fs_field: { raw_value: target } } }
   const valueMappings = imp.value_mappings_json || {};
+  // Per-import static field values: { fs_field: value } — overrides per-row mapping.
+  const staticValues = imp.static_values_json || {};
 
   // 3. Normalize each row and split into FS-bound chunks
   const normResults = pendingRows.map(r => {
-    const nr = normalizeRow(r.raw_json, mapping, imp.import_type, schemaIndex, valueMappings);
+    const nr = normalizeRow(r.raw_json, mapping, imp.import_type, schemaIndex, valueMappings, staticValues);
     return { row: r, ...nr };
   });
 

@@ -266,6 +266,14 @@ export default function ImportDetailPage({ params }) {
         )}
       </div>
 
+      {/* ── Static Values ────────────────────────────────────────────────── */}
+      <StaticValuesPanel
+        importId={id}
+        schema={schema}
+        initial={imp.static_values_json || {}}
+        onSaved={() => load()}
+      />
+
       {/* ── Push controls ────────────────────────────────────────────────── */}
       <div className="rounded-xl border" style={{ borderColor: 'var(--border)' }}>
         <div className="px-4 py-3" style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
@@ -860,6 +868,178 @@ function ValueMappingModal({ importId, excelCol, dropdownTargets, existing, onCl
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+// ─── Static Values panel ────────────────────────────────────────────────────
+// Lets the user pin a fixed value on a FS field for every row in this import.
+// Independent of column mapping — useful when an entire batch shares a state
+// the source data doesn't carry (e.g. "every row's lifecycle_stage = Sales
+// Qualified Lead"). Rules apply LAST, so they win over per-row mappings.
+//
+// Storage: { fs_field: value } on crm_imports.static_values_json.
+// Engine resolves dropdown labels → IDs via the same path the per-row
+// mapping uses, so the user can pick a label here and not worry about IDs.
+function StaticValuesPanel({ importId, schema, initial, onSaved }) {
+  const [open, setOpen] = useState(Object.keys(initial || {}).length > 0);
+  const [rules, setRules] = useState(() => {
+    // Working state: array of { id, fsField, value } so we can render and
+    // edit each rule individually. The DB shape is a flat map but the UI
+    // wants rows.
+    return Object.entries(initial || {}).map(([fsField, value], i) => ({
+      id: `r${i}`, fsField, value: value ?? '',
+    }));
+  });
+  const [saving, setSaving] = useState(false);
+
+  // Dropdown field index for the right-side value pickers.
+  const fieldByName = useMemo(() => {
+    const m = new Map(); for (const f of schema) m.set(f.name, f); return m;
+  }, [schema]);
+
+  // For the field-name picker, sort all schema fields alphabetically by label.
+  const fieldOptions = useMemo(() => {
+    return [...schema].sort((a, b) => (a.label || a.name).localeCompare(b.label || b.name));
+  }, [schema]);
+
+  const addRule = () => setRules(r => [...r, { id: `r${Date.now()}`, fsField: '', value: '' }]);
+  const updateRule = (id, patch) => setRules(r => r.map(x => x.id === id ? { ...x, ...patch } : x));
+  const removeRule = (id) => setRules(r => r.filter(x => x.id !== id));
+
+  const save = async () => {
+    setSaving(true);
+    // Collapse to the DB shape; last entry per fsField wins if there are dupes.
+    const out = {};
+    for (const r of rules) {
+      if (!r.fsField || r.value === '' || r.value == null) continue;
+      out[r.fsField] = r.value;
+    }
+    const res = await fetch(`/api/crm/imports/${importId}/static-values`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ static_values: out }),
+    });
+    setSaving(false);
+    const j = await res.json();
+    if (!j.ok) { alert(`Save failed: ${j.error}`); return; }
+    await onSaved();
+  };
+
+  return (
+    <div className="rounded-xl border" style={{ borderColor: 'var(--border)' }}>
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full text-left px-4 py-3 flex items-center justify-between"
+        style={{ background: 'var(--surface)', borderBottom: open ? '1px solid var(--border)' : 'none', cursor: 'pointer' }}>
+        <div>
+          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
+            Static Values {rules.length > 0 ? `(${rules.length})` : ''}
+          </h2>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+            Apply the same value to a Freshworks field on every row in this import. Overrides per-row column mappings.
+          </p>
+        </div>
+        <span style={{ color: 'var(--text-muted)' }}>{open ? '▾' : '▸'}</span>
+      </button>
+
+      {open && (
+        <div style={{ padding: '8px 16px 16px' }}>
+          {rules.length === 0 && (
+            <p className="text-xs py-2" style={{ color: 'var(--text-muted)' }}>
+              No static values set. Click + Add rule below to pin one.
+            </p>
+          )}
+
+          {rules.map(r => {
+            const f = fieldByName.get(r.fsField);
+            const isDropdown = f && (f.type === 'dropdown' || f.type === 'multi_select_dropdown');
+            const isCheckbox = f && f.type === 'checkbox';
+            const isDate     = f && (f.type === 'date' || f.type === 'datetime');
+            const isNumber   = f && f.type === 'number';
+            return (
+              <div key={r.id} style={{
+                display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 12,
+                padding: '8px 0', borderBottom: '1px solid var(--border)', alignItems: 'center',
+              }}>
+                <select value={r.fsField} onChange={e => updateRule(r.id, { fsField: e.target.value, value: '' })}
+                  style={{
+                    background: 'var(--surface2)', border: '1px solid var(--border)',
+                    borderRadius: 6, padding: '6px 8px', fontSize: 12,
+                    color: r.fsField ? 'var(--text-primary)' : 'var(--text-muted)',
+                  }}>
+                  <option value="">— Pick a Freshworks field —</option>
+                  {fieldOptions.map(opt => (
+                    <option key={opt.name} value={opt.name}>
+                      {opt.label}{opt.group ? ` (${opt.group})` : ''} — {opt.type}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Right-side: value picker keyed to the field's type */}
+                {isDropdown ? (
+                  <select value={r.value} onChange={e => updateRule(r.id, { value: e.target.value })}
+                    style={{
+                      background: 'var(--surface2)', border: '1px solid var(--border)',
+                      borderRadius: 6, padding: '6px 8px', fontSize: 12,
+                      color: r.value ? 'var(--text-primary)' : 'var(--text-muted)',
+                    }}>
+                    <option value="">— Pick a choice —</option>
+                    {(f.choices || []).map(c => {
+                      const lbl = c.value || c.name;
+                      return <option key={String(c.id)} value={lbl}>{lbl}</option>;
+                    })}
+                  </select>
+                ) : isCheckbox ? (
+                  <select value={String(r.value)} onChange={e => updateRule(r.id, { value: e.target.value === 'true' })}
+                    style={{
+                      background: 'var(--surface2)', border: '1px solid var(--border)',
+                      borderRadius: 6, padding: '6px 8px', fontSize: 12,
+                      color: 'var(--text-primary)',
+                    }}>
+                    <option value="false">false</option>
+                    <option value="true">true</option>
+                  </select>
+                ) : (
+                  <input
+                    type={isDate ? 'date' : isNumber ? 'number' : 'text'}
+                    value={r.value}
+                    onChange={e => updateRule(r.id, { value: e.target.value })}
+                    placeholder={f ? `Value to send to ${f.label}` : 'Pick a field first'}
+                    disabled={!r.fsField}
+                    style={{
+                      background: 'var(--surface2)', border: '1px solid var(--border)',
+                      borderRadius: 6, padding: '6px 8px', fontSize: 12,
+                      color: 'var(--text-primary)',
+                    }}
+                  />
+                )}
+
+                <button onClick={() => removeRule(r.id)} title="Remove rule"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 14, padding: '4px 6px' }}>
+                  🗑
+                </button>
+              </div>
+            );
+          })}
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'space-between' }}>
+            <button onClick={addRule}
+              className="text-xs px-3 py-1.5 rounded"
+              style={{ background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+              + Add rule
+            </button>
+            <button onClick={save} disabled={saving}
+              className="text-xs px-3 py-1.5 rounded font-medium"
+              style={{
+                background: 'var(--accent)', color: '#fff', border: 'none',
+                cursor: 'pointer', opacity: saving ? 0.5 : 1,
+              }}>
+              {saving ? 'Saving…' : 'Save Static Values'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
