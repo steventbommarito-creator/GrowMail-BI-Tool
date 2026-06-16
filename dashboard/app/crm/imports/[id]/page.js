@@ -45,6 +45,7 @@ export default function ImportDetailPage({ params }) {
   const [showDelete, setShowDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
+  const [valueModal, setValueModal] = useState(null);   // null | { excelCol } — which column we're configuring values for
 
   const load = useCallback(async (statusOverride) => {
     setLoading(true);
@@ -123,6 +124,16 @@ export default function ImportDetailPage({ params }) {
     const norm = excelCol.toLowerCase().replace(/[^a-z]/g, '');
     const hit = schema.find(f => f.name.toLowerCase().replace(/[^a-z]/g, '') === norm);
     return hit ? hit.name : '';
+  };
+
+  // Find the subset of fs fields mapped to this Excel column whose schema
+  // entry is a dropdown — those are the ones that benefit from value mapping.
+  // Returns the full field objects (so the modal can show labels + choices).
+  const dropdownTargetsForColumn = (excelCol) => {
+    const targets = getMappedFields(excelCol);
+    return targets
+      .map(name => schema.find(f => f.name === name))
+      .filter(f => f && (f.type === 'dropdown' || f.type === 'multi_select_dropdown'));
   };
 
   const resolvedCount = pushCount === 'all' ? totalPending : Number(pushCount) || 0;
@@ -216,9 +227,15 @@ export default function ImportDetailPage({ params }) {
             {(imp.excel_columns || []).map(col => {
               const selected = getMappedFields(col);
               const suggested = suggestField(col);
+              const dropdownTargets = dropdownTargetsForColumn(col);
+              // Count the rules already defined for this column across all its
+              // dropdown targets — surfaces "✓ 5 mapped" so the user knows
+              // there's existing configuration without opening the modal.
+              const vmForCol = imp.value_mappings_json?.[col] || {};
+              const ruleCount = Object.values(vmForCol).reduce((s, m) => s + Object.keys(m || {}).length, 0);
               return (
                 <div key={col} className="px-4 py-3"
-                  style={{ borderBottom: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, alignItems: 'start' }}>
+                  style={{ borderBottom: '1px solid var(--border)', display: 'grid', gridTemplateColumns: '200px 1fr auto', gap: 16, alignItems: 'start' }}>
                   <span className="text-sm font-mono" style={{ color: 'var(--text-primary)', paddingTop: 6 }}>{col}</span>
                   <MappingCombobox
                     schema={schema}
@@ -226,6 +243,22 @@ export default function ImportDetailPage({ params }) {
                     suggested={suggested}
                     onChange={(nextFields) => setMappedFields(col, nextFields)}
                   />
+                  {dropdownTargets.length > 0 && (
+                    <button
+                      onClick={() => setValueModal({ excelCol: col })}
+                      title={`Translate this column's source values into Freshworks ${dropdownTargets.map(d => d.label).join(', ')} choices`}
+                      className="text-xs px-3 py-1.5 rounded font-medium"
+                      style={{
+                        background: ruleCount > 0 ? 'var(--accent-light)' : 'var(--surface2)',
+                        color:      ruleCount > 0 ? 'var(--accent)'      : 'var(--text-secondary)',
+                        border: '1px solid var(--border)',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        marginTop: 4,
+                      }}>
+                      Values{ruleCount > 0 ? ` (${ruleCount})` : ''}
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -430,6 +463,17 @@ export default function ImportDetailPage({ params }) {
           </div>
         </div>
       )}
+
+      {valueModal && (
+        <ValueMappingModal
+          importId={id}
+          excelCol={valueModal.excelCol}
+          dropdownTargets={dropdownTargetsForColumn(valueModal.excelCol)}
+          existing={imp.value_mappings_json || {}}
+          onClose={() => setValueModal(null)}
+          onSaved={async () => { setValueModal(null); await load(); }}
+        />
+      )}
     </div>
   );
 }
@@ -617,6 +661,205 @@ function MappingCombobox({ schema, selected, suggested, onChange }) {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Value Mapping modal ─────────────────────────────────────────────────────
+// Per column, translate the messy source values from the user's spreadsheet
+// into the canonical FS choice labels. The engine applies these BEFORE the
+// dropdown text→ID resolution, so a rule like "Disqualified" → "Unqualified"
+// rewrites the value, then FS converts "Unqualified" to choice id 127004203348.
+//
+// Layout: one section per (excelCol, fs_field) target where fs_field is a
+// dropdown. Each section lists every distinct source value found in the
+// column's rows. Each row has a dropdown to pick the target FS choice, plus
+// a "Skip" option that translates to `null` (the engine drops the field from
+// the payload for rows with that value).
+//
+// Auto-pre-fill: on open, if a source value already matches an FS choice
+// label case-insensitively, we suggest it (greyed out as "Auto: <choice>")
+// without persisting until the user explicitly saves.
+function ValueMappingModal({ importId, excelCol, dropdownTargets, existing, onClose, onSaved }) {
+  const [uniqueValues, setUniqueValues] = useState(null); // [{ value, count }]
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  // working state = { fsField: { sourceValue: targetLabel|null|'__unset__' } }
+  const [working, setWorking] = useState(() => {
+    const init = {};
+    for (const f of dropdownTargets) {
+      init[f.name] = { ...(existing[excelCol]?.[f.name] || {}) };
+    }
+    return init;
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/crm/imports/${importId}/unique-values?column=${encodeURIComponent(excelCol)}`);
+        const j = await res.json();
+        if (!cancelled) setUniqueValues(j.ok ? (j.values || []) : []);
+      } catch { if (!cancelled) setUniqueValues([]); }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [importId, excelCol]);
+
+  // Auto-pre-fill suggestion: if a source value already exactly matches one
+  // of the target field's choice labels (case-insensitive), surface that as
+  // the placeholder so the user sees the auto-resolution would already work
+  // without an explicit rule.
+  const autoSuggest = (fsField, sourceValue) => {
+    const f = dropdownTargets.find(t => t.name === fsField);
+    if (!f?.choices) return null;
+    const norm = String(sourceValue).toLowerCase().trim();
+    const hit = f.choices.find(c => String(c.value || c.name || '').toLowerCase().trim() === norm);
+    return hit ? (hit.value || hit.name) : null;
+  };
+
+  const setRule = (fsField, sourceValue, target) => {
+    setWorking(w => {
+      const next = { ...w, [fsField]: { ...(w[fsField] || {}) } };
+      if (target === '__unset__') delete next[fsField][sourceValue];
+      else next[fsField][sourceValue] = target;   // string or null (skip)
+      return next;
+    });
+  };
+
+  const save = async () => {
+    setSaving(true);
+    // Build the full value_mappings_json: keep other columns intact, replace
+    // just this column's entry with our working state. Empty rules are removed.
+    const next = { ...(existing || {}) };
+    const colMap = {};
+    for (const f of dropdownTargets) {
+      const rules = working[f.name] || {};
+      const cleaned = {};
+      for (const [k, v] of Object.entries(rules)) {
+        if (v === '__unset__') continue;     // dropdown placeholder, no rule
+        cleaned[k] = v;                       // string or null
+      }
+      if (Object.keys(cleaned).length > 0) colMap[f.name] = cleaned;
+    }
+    if (Object.keys(colMap).length > 0) next[excelCol] = colMap;
+    else delete next[excelCol];
+
+    const res = await fetch(`/api/crm/imports/${importId}/value-mapping`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value_mappings: next }),
+    });
+    setSaving(false);
+    const j = await res.json();
+    if (!j.ok) { alert(`Save failed: ${j.error}`); return; }
+    onSaved();
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+      padding: 24,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12,
+        width: 760, maxWidth: '95vw', maxHeight: '90vh',
+        display: 'flex', flexDirection: 'column',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+      }}>
+        <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
+          <p style={{ margin: 0, fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>
+            Value Mapping — <span style={{ fontFamily: 'monospace' }}>{excelCol}</span>
+          </p>
+          <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
+            Translate the source values from your spreadsheet into Freshworks choices. Pick "— Skip —" to drop the field on rows with that value. Unmapped values pass through (and fail if they don't match an FS choice).
+          </p>
+        </div>
+
+        <div style={{ overflow: 'auto', flex: 1, padding: '8px 0' }}>
+          {loading && (
+            <p className="px-5 py-6 text-center text-sm" style={{ color: 'var(--text-muted)' }}>Scanning column for unique values…</p>
+          )}
+          {!loading && (uniqueValues || []).length === 0 && (
+            <p className="px-5 py-6 text-center text-sm" style={{ color: 'var(--text-muted)' }}>No values to map.</p>
+          )}
+          {!loading && (uniqueValues || []).length > 0 && dropdownTargets.map(target => {
+            const rules = working[target.name] || {};
+            return (
+              <div key={target.name} style={{ marginBottom: 20 }}>
+                <div className="px-5 py-2"
+                  style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
+                  <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)', margin: 0, letterSpacing: 0.5 }}>
+                    → {target.label}{target.required ? ' *' : ''} <span style={{ fontFamily: 'monospace', textTransform: 'none', letterSpacing: 0 }}>({target.name})</span>
+                  </p>
+                  <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                    FS choices: {(target.choices || []).map(c => c.value || c.name).join(', ')}
+                  </p>
+                </div>
+                <div>
+                  {uniqueValues.map(({ value, count }) => {
+                    const auto = autoSuggest(target.name, value);
+                    const current = Object.prototype.hasOwnProperty.call(rules, value) ? rules[value] : '__unset__';
+                    return (
+                      <div key={value} className="px-5 py-1.5 flex items-center justify-between"
+                        style={{ borderBottom: '1px solid var(--border)', gap: 12 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <span style={{ fontSize: 13, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{value}</span>
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>{count.toLocaleString()} row{count !== 1 ? 's' : ''}</span>
+                        </div>
+                        <select
+                          value={current === null ? '__skip__' : (current || '__unset__')}
+                          onChange={e => {
+                            const v = e.target.value;
+                            if (v === '__unset__') setRule(target.name, value, '__unset__');
+                            else if (v === '__skip__') setRule(target.name, value, null);
+                            else setRule(target.name, value, v);
+                          }}
+                          style={{
+                            background: 'var(--surface2)', border: '1px solid var(--border)',
+                            borderRadius: 6, padding: '4px 8px', fontSize: 12,
+                            color: current === '__unset__' ? 'var(--text-muted)' : 'var(--text-primary)',
+                            minWidth: 220,
+                          }}>
+                          <option value="__unset__">{auto ? `— Auto: ${auto} —` : '— Not set (pass through) —'}</option>
+                          {(target.choices || []).map(c => {
+                            const lbl = c.value || c.name;
+                            return <option key={String(c.id)} value={lbl}>{lbl}</option>;
+                          })}
+                          <option disabled>──────────────</option>
+                          <option value="__skip__">— Skip (don't send to FS) —</option>
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="px-5 py-3 flex items-center justify-between"
+          style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
+          <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            {uniqueValues ? `${uniqueValues.length} distinct values found in this column` : ''}
+          </p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={onClose}
+              style={{ padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+              Cancel
+            </button>
+            <button onClick={save} disabled={saving}
+              style={{ padding: '6px 18px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                background: 'var(--accent)', border: 'none', color: '#fff', fontWeight: 600,
+                opacity: saving ? 0.5 : 1 }}>
+              {saving ? 'Saving…' : 'Save Mappings'}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

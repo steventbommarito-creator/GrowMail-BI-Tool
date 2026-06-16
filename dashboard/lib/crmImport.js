@@ -149,9 +149,30 @@ function normalizeCurrency(v) {
  * field is missing or fails validation — caller sets the row to
  * 'validation_failed' so it never hits FS.
  */
-function normalizeRow(raw, mapping, type, schemaIndex) {
+function normalizeRow(raw, mapping, type, schemaIndex, valueMappings) {
   const normalized = {};
   const errors = [];
+
+  // Value mapping helper. Looks up the raw Excel value against per-(col, field)
+  // rules the user has set. Returns:
+  //   { skip: true }                          — explicit "don't send this field"
+  //   { override: true, value: <translated> } — replace the raw value
+  //   { override: false }                     — no rule, pass through unchanged
+  const applyValueMap = (excelCol, fsField, value) => {
+    const rules = valueMappings?.[excelCol]?.[fsField];
+    if (!rules) return { override: false };
+    // Case-sensitive first (exact), then case-insensitive fallback for forgiveness.
+    let target;
+    if (Object.prototype.hasOwnProperty.call(rules, value)) target = rules[value];
+    else {
+      const lc = String(value).toLowerCase().trim();
+      const hit = Object.keys(rules).find(k => k.toLowerCase().trim() === lc);
+      if (hit !== undefined) target = rules[hit];
+      else return { override: false };
+    }
+    if (target === null) return { skip: true };       // explicit skip
+    return { override: true, value: target };
+  };
 
   // Apply column→field mapping with per-field normalization based on fs_field_name.
   //
@@ -188,6 +209,14 @@ function normalizeRow(raw, mapping, type, schemaIndex) {
       // Even after normalization, a value could become null (e.g. unparseable
       // date or invalid currency). Same rule: skip rather than wipe.
       if (cleaned == null || cleaned === '') continue;
+
+      // Value mapping — apply the user's per-import translation rules BEFORE
+      // dropdown resolution. Lets the user say "when this column has 'Not
+      // Ready', send 'Interested' to FS" so messy source data lines up with
+      // the FS canonical choices. Null target = drop the field on this row.
+      const vm = applyValueMap(excelCol, fsField, cleaned);
+      if (vm.skip) continue;
+      if (vm.override) cleaned = vm.value;
 
       // Dropdown text→ID resolution. If this field is a dropdown
       // (or multi_select_dropdown) in the FS schema, convert the label to
@@ -523,9 +552,12 @@ async function pushBatch(supabase, importId, count, ctx) {
   // mappings ship raw text and FS rejects every row.
   const schemaIndex = await buildSchemaIndex(supabase, imp.import_type);
 
+  // Per-import value mappings: { excel_col: { fs_field: { raw_value: target } } }
+  const valueMappings = imp.value_mappings_json || {};
+
   // 3. Normalize each row and split into FS-bound chunks
   const normResults = pendingRows.map(r => {
-    const nr = normalizeRow(r.raw_json, mapping, imp.import_type, schemaIndex);
+    const nr = normalizeRow(r.raw_json, mapping, imp.import_type, schemaIndex, valueMappings);
     return { row: r, ...nr };
   });
 
