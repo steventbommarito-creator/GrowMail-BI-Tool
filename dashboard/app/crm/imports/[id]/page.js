@@ -795,6 +795,9 @@ function ValueMappingModal({ importId, excelCol, dropdownTargets, existing, onCl
           )}
           {!loading && (uniqueValues || []).length > 0 && dropdownTargets.map(target => {
             const rules = working[target.name] || {};
+            const fallbackCurrent = Object.prototype.hasOwnProperty.call(rules, '__fallback__')
+              ? rules.__fallback__
+              : '__unset__';
             return (
               <div key={target.name} style={{ marginBottom: 20 }}>
                 <div className="px-5 py-2"
@@ -805,6 +808,42 @@ function ValueMappingModal({ importId, excelCol, dropdownTargets, existing, onCl
                   <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
                     FS choices: {(target.choices || []).map(c => c.value || c.name).join(', ')}
                   </p>
+                </div>
+                {/* Fallback row — applies when a source value doesn't match any FS
+                    choice and isn't covered by an explicit rule. Useful for
+                    owner_id ("anything unrecognized → Customer Service"). */}
+                <div className="px-5 py-2 flex items-center justify-between"
+                  style={{ background: 'var(--accent-light)', borderBottom: '1px solid var(--border)', gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 600 }}>
+                      When value doesn't match an FS choice →
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary)', marginLeft: 6 }}>
+                      Fallback (applied row-by-row on misses)
+                    </span>
+                  </div>
+                  <select
+                    value={fallbackCurrent === null ? '__skip__' : (fallbackCurrent || '__unset__')}
+                    onChange={e => {
+                      const v = e.target.value;
+                      if (v === '__unset__') setRule(target.name, '__fallback__', '__unset__');
+                      else if (v === '__skip__') setRule(target.name, '__fallback__', null);
+                      else setRule(target.name, '__fallback__', v);
+                    }}
+                    style={{
+                      background: 'var(--surface)', border: '1px solid var(--border)',
+                      borderRadius: 6, padding: '4px 8px', fontSize: 12,
+                      color: fallbackCurrent === '__unset__' ? 'var(--text-muted)' : 'var(--text-primary)',
+                      minWidth: 220, fontWeight: 600,
+                    }}>
+                    <option value="__unset__">— Reject row on unrecognized value —</option>
+                    {(target.choices || []).map(c => {
+                      const lbl = c.value || c.name;
+                      return <option key={String(c.id)} value={lbl}>{lbl}</option>;
+                    })}
+                    <option disabled>──────────────</option>
+                    <option value="__skip__">— Skip the field (don't send) —</option>
+                  </select>
                 </div>
                 <div>
                   {uniqueValues.map(({ value, count }) => {

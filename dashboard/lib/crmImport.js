@@ -162,11 +162,14 @@ function normalizeRow(raw, mapping, type, schemaIndex, valueMappings, staticValu
     const rules = valueMappings?.[excelCol]?.[fsField];
     if (!rules) return { override: false };
     // Case-sensitive first (exact), then case-insensitive fallback for forgiveness.
+    // The __fallback__ key is reserved for the on-miss fallback applied later,
+    // never used for per-value lookup.
     let target;
+    if (value === '__fallback__') return { override: false };
     if (Object.prototype.hasOwnProperty.call(rules, value)) target = rules[value];
     else {
       const lc = String(value).toLowerCase().trim();
-      const hit = Object.keys(rules).find(k => k.toLowerCase().trim() === lc);
+      const hit = Object.keys(rules).find(k => k !== '__fallback__' && k.toLowerCase().trim() === lc);
       if (hit !== undefined) target = rules[hit];
       else return { override: false };
     }
@@ -239,11 +242,23 @@ function normalizeRow(raw, mapping, type, schemaIndex, valueMappings, staticValu
       // Dropdown text→ID resolution. If this field is a dropdown
       // (or multi_select_dropdown) in the FS schema, convert the label to
       // the choice ID — FS rejects payloads where dropdowns carry text. On
-      // unresolved values we record an error so the row goes to
-      // validation_failed and the user can fix the spreadsheet.
+      // miss, fall back to the user-configured __fallback__ rule if present
+      // (so unknown owner names roll up to "Customer Service" etc.).
       if (schemaIndex) {
         const r = resolveDropdownValue(fsField, cleaned, schemaIndex);
-        if (!r.ok) { errors.push(r.error); continue; }
+        if (!r.ok) {
+          // Try fallback: a special __fallback__ rule under value_mappings.
+          const fallback = valueMappings?.[excelCol]?.[fsField]?.__fallback__;
+          if (fallback === null) continue;   // explicit "skip on miss"
+          if (fallback !== undefined && fallback !== '') {
+            const fr = resolveDropdownValue(fsField, fallback, schemaIndex);
+            if (fr.ok) { cleaned = fr.value; normalized[fsField] = cleaned; continue; }
+            errors.push(`${fsField}: fallback "${fallback}" also unresolved (${r.error})`);
+            continue;
+          }
+          errors.push(r.error);
+          continue;
+        }
         cleaned = r.value;
       }
       normalized[fsField] = cleaned;
