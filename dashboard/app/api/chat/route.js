@@ -22,6 +22,13 @@ const CHAT_ALLOWED_EMAILS = new Set([
   'steven.t.bommarito@gmail.com',  // also allow Steven's personal account for testing
 ]);
 
+// Model: default to OpenAI's flagship reasoning ("thinking") model. Override
+// with OPENAI_CHAT_MODEL env var (e.g. 'o3-pro', 'o4-mini', a future GPT-5) —
+// no code change needed. Reasoning models (o-series) reject the temperature
+// param and run slower, so we branch on the name below.
+const CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || 'o3';
+const IS_REASONING_MODEL = /^o\d/i.test(CHAT_MODEL);
+
 const SYSTEM_PROMPT = `
 You are a PostgreSQL analyst for the GrowMail BI dashboard. The user asks
 questions in plain English. You answer by generating a single SELECT (or WITH
@@ -131,6 +138,18 @@ export async function POST(request) {
   if (messages.length === 0) return NextResponse.json({ ok: false, error: 'No messages' }, { status: 400 });
 
   // ── Call OpenAI ────────────────────────────────────────────────────────
+  // Build the payload. Reasoning models reject `temperature` (only the default
+  // is allowed), so we only set it for non-reasoning models.
+  const payload = {
+    model: CHAT_MODEL,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...messages,
+    ],
+    response_format: { type: 'json_object' },
+  };
+  if (!IS_REASONING_MODEL) payload.temperature = 0.1;
+
   let llmRes;
   try {
     llmRes = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -139,15 +158,7 @@ export async function POST(request) {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          ...messages,
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0.1,
-      }),
+      body: JSON.stringify(payload),
     });
   } catch (e) {
     return NextResponse.json({ ok: false, error: `Network error reaching OpenAI: ${e.message}` }, { status: 502 });
@@ -195,5 +206,6 @@ export async function POST(request) {
   });
 }
 
-// Allow up to 60s for slow LLM responses + query execution.
-export const maxDuration = 60;
+// Reasoning models "think" before answering, so allow more wall-clock than a
+// standard completion would need. 120s comfortably covers o3 on a SQL-gen task.
+export const maxDuration = 120;
