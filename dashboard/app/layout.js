@@ -1,6 +1,7 @@
 import { Geist } from "next/font/google";
 import "./globals.css";
 import Nav from "../components/Nav";
+import ChatWidget from "../components/ChatWidget";
 import { ThemeProvider } from "../context/ThemeContext";
 
 const geistSans = Geist({
@@ -20,6 +21,8 @@ export default function RootLayout({ children }) {
         <ThemeProvider>
           <Nav />
           <main className="flex-1 p-4 md:p-6">{children}</main>
+          {/* Floating AI chat widget — self-gates rendering by user email. */}
+          <ChatWidget />
         </ThemeProvider>
       </body>
     </html>
