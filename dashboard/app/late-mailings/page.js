@@ -302,7 +302,7 @@ export default function LateMailingsPage() {
     const maxDate = addDays(today, 7);
     const cutoff = futureCutoffInput > maxDate ? maxDate : futureCutoffInput;
     const { data, error } = await supabase.from('osprey_mail_drops')
-      .select('mail_drop_id, order_id, customer_id, customer_name, product_category, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, actual_postage, mail_method, mail_drop_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id')
+      .select('mail_drop_id, order_id, customer_id, customer_name, product_category, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, actual_postage, mail_method, mail_drop_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id, mail_location')
       .in('order_status', ACTIVE_ORDER_STATUSES)
       .eq('is_live_status', true)
       .gte('drop_est_date', today)
