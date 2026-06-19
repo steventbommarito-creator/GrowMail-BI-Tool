@@ -14,6 +14,8 @@
 // dashboard content into emitting malicious queries.
 
 import { NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
 import { createClient } from '../../../lib/supabaseServer';
 
 // Allowlist — easy to extend. Anyone not in here gets 403 even if signed in.
@@ -29,98 +31,35 @@ const CHAT_ALLOWED_EMAILS = new Set([
 const CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || 'o3';
 const IS_REASONING_MODEL = /^o\d/i.test(CHAT_MODEL);
 
-const SYSTEM_PROMPT = `
-You are a PostgreSQL analyst for the GrowMail BI dashboard. The user asks
-questions in plain English. You answer by generating a single SELECT (or WITH
-… SELECT) query against the schema below. The query runs in a READ ONLY
-transaction so no writes are possible — focus on accurate retrieval.
-
-# Schema
-
-## osprey_mail_drops — every mail drop from the Gordon & Lance report
-- mail_drop_id (text)        unique ID for the drop
-- order_id (text)            parent order (1 order → 1+ drops)
-- customer_id (text)
-- customer_name (text)
-- product_category (text)    e.g. 'EDDM', 'Saturation Postcard', 'Custom Product'
-- mail_location (text)       fulfillment facility ('Kaleidoscope', '4Over', 'Las Vegas Color', etc.)
-- print_location (text)      may differ from mail_location
-- fulfillment_path (text)    derived: print_location || ' > ' || mail_location
-- mail_method (text)         e.g. 'EDDM', 'Saturation', 'Targeted Mail', 'LDP'
-- order_status (text)        24 distinct values inc. 'COMPLETE', 'CANCELED', 'DAL [SUBMITTED]', 'DIGITAL READY', 'DMM [ACTIVE]', 'OUTSOURCED', 'QUOTE', etc.
-- drop_status (text)
-- is_live_status (bool)      TRUE = currently in production. Use this for "live" / "in flight" filters.
-- drop_est_date (date)       scheduled mail date
-- drop_act_date (date)       actual mail date (NULL = not yet mailed)
-- mail_drop_quantity (int)
-- mail_drop_amount (numeric) customer billing amount for this drop
-- postage_amount (numeric)   estimated postage
-- actual_postage (numeric)   posted postage once known
-- production_amount (numeric)
-- order_amount (numeric)     total order revenue
-- payment_amount_applied (numeric)
-- web_id (text)
-- captured_at (timestamptz)  snapshot timestamp (latest wins per mail_drop_id)
-- capture_date (date)
-
-NOTE: there are multiple snapshots per mail_drop_id. To get the current state
-of each drop, use the latest captured_at per mail_drop_id:
-    WITH latest AS (
-      SELECT DISTINCT ON (mail_drop_id) *
-      FROM osprey_mail_drops
-      ORDER BY mail_drop_id, captured_at DESC
-    )
-
-## customer_terms — payment terms per customer
-- customer_id (text)
-- term_label (text)          'PrePay' | 'NET30' | 'NET45' | 'Other'
-
-## usps_transactions — EPS charges
-- transaction_number (text)
-- transaction_date (date)
-- amount (numeric)
-- osprey_mail_drop_id (text) — joins to osprey_mail_drops.mail_drop_id when this charge corresponds to a drop
-
-## planned_drops — user-set "plan to mail" dates
-- mail_drop_id (text)
-- planned_date (date)
-- planned_by (text)
-- is_active (bool)
-
-## hot_jobs — user-flagged "hot" drops
-- mail_drop_id (text)
-- reason (text)
-- set_by (text)
-- is_hot (bool)
-
-# Domain idioms
-
-- "Late mail" / "past due" = is_live_status = TRUE AND drop_est_date < CURRENT_DATE AND drop_act_date IS NULL
-- "Live order statuses" the dashboard treats as in-flight:
-    ('DAL [SUBMITTED]', 'DIGITAL READY', 'DIGITAL [STAGING]', 'OUTSOURCED', 'OUTSOURCED [STAGING]')
-- "Required postage" for a drop = COALESCE(actual_postage, postage_amount)
-- "PrePay open balance" on an order = (order_amount - payment_amount_applied) > 0  (only meaningful for term_label = 'PrePay')
-- "Fulfillment location" = mail_location (the facility shipping the mail)
-- LDP drops are typically excluded from postage-funding views: mail_method != 'LDP' OR mail_method IS NULL
-- "EPS-deducted" = drop has a matching row in usps_transactions on osprey_mail_drop_id
-
-# Output rules
-
-Return ONLY a JSON object — no markdown, no extra text. Shape:
-{
-  "explanation": "1–2 sentence friendly summary of what the result shows",
-  "sql": "SELECT ..."
+// The agent's domain context lives in OPENAI_CONTEXT.md (single source of
+// truth, human-editable). Read it once at module load. next.config.mjs
+// force-includes it in this route's serverless bundle so the read works on
+// Vercel. If the file can't be read for any reason, fall back to a minimal
+// prompt so the agent still functions (degraded but not broken).
+function loadSystemPrompt() {
+  const candidates = [
+    path.join(process.cwd(), 'OPENAI_CONTEXT.md'),
+    path.join(process.cwd(), 'dashboard', 'OPENAI_CONTEXT.md'),
+  ];
+  for (const f of candidates) {
+    try {
+      const md = fs.readFileSync(f, 'utf8');
+      if (md && md.length > 100) return md;
+    } catch { /* try next */ }
+  }
+  return [
+    'You are a PostgreSQL analyst for the GrowMail BI dashboard.',
+    'Answer questions by generating ONE read-only SELECT (or WITH … SELECT) query.',
+    'Return JSON only: { "explanation": "...", "sql": "SELECT ..." }.',
+    'Single statement, no semicolons, starts with SELECT or WITH, LIMIT 100 by default.',
+    'Main table: osprey_mail_drops (one row per mail_drop_id). A drop is COMPLETED when',
+    'drop_act_date is set; LIVE when is_live_status and not yet mailed; FORECASTED when',
+    'unmailed with a future drop_est_date. Exclude CANCELED/VOID/QUOTE/INCOMPLETE/LIMBO',
+    'from operational answers. Postage = COALESCE(actual_postage, postage_amount).',
+  ].join(' ');
 }
 
-The SQL MUST:
-- Be a single statement (no semicolons)
-- Start with SELECT or WITH
-- Use the dedup CTE pattern shown above when querying current drop state
-- LIMIT 100 by default (unless the user explicitly asks for more or wants aggregates)
-- Use lowercase identifiers; cast to numeric and round to 2 decimal places for currency
-- ORDER intelligently (usually DESC by the main metric the user asked for)
-- For "by location" / "by facility" / "by X" requests, GROUP BY that column and aggregate counts + sums
-`;
+const SYSTEM_PROMPT = loadSystemPrompt();
 
 export async function POST(request) {
   const supabase = await createClient();
