@@ -227,26 +227,95 @@ export default function LateMailingsPage() {
   const lateDrops = useMemo(() => drops.map(enrichDrop), [drops, enrichDrop]);
   const enrichedFutureDrops = useMemo(() => futureDrops.map(enrichDrop).map(d => ({ ...d, _isFuture: true })), [futureDrops, enrichDrop]);
 
-  // KPI roll-ups. Postage is post-EPS-deduction; revenue numbers use the
-  // full mail_drop_amount per the customer's contract regardless of how
-  // much has been collected so far.
+  // ── Filter pipeline ────────────────────────────────────────────────────────
+  // Declared HERE (before KPIs/charts/table) so every downstream metric on the
+  // page — cards, two aging bar charts, donut, table running total, exports —
+  // reads from filteredLateDrops and reacts to a filter change in one render.
+  // Without this position the metrics would lock to the full backlog and only
+  // the table would respond.
+  const filterChoices = useMemo(() => {
+    const all = [...lateDrops, ...enrichedFutureDrops];
+    const collect = (key) => {
+      const s = new Set();
+      for (const d of all) {
+        const v = d[key];
+        if (v != null && v !== '') s.add(v);
+      }
+      return [...s].sort((a, b) => String(a).localeCompare(String(b)));
+    };
+    return {
+      product:      collect('product_category'),
+      orderId:      collect('order_id'),
+      dropId:       collect('mail_drop_id'),
+      billVia:      collect('billVia'),
+      mailLocation: collect('mail_location'),
+    };
+  }, [lateDrops, enrichedFutureDrops]);
+
+  const passesFilters = useCallback((d) => {
+    if (filters.daysLate.min !== '' && d.daysLate < Number(filters.daysLate.min)) return false;
+    if (filters.daysLate.max !== '' && d.daysLate > Number(filters.daysLate.max)) return false;
+    if (filters.est.start && (!d.drop_est_date || d.drop_est_date < filters.est.start)) return false;
+    if (filters.est.end   && (!d.drop_est_date || d.drop_est_date > filters.est.end))   return false;
+    if (filters.customer) {
+      const q = filters.customer.toLowerCase();
+      if (!(d.customer_name || '').toLowerCase().includes(q)) return false;
+    }
+    if (filters.product.length     && !filters.product.includes(d.product_category)) return false;
+    if (filters.orderId.length     && !filters.orderId.includes(d.order_id))         return false;
+    if (filters.dropId.length      && !filters.dropId.includes(d.mail_drop_id))      return false;
+    if (filters.billVia.length     && !filters.billVia.includes(d.billVia))          return false;
+    if (filters.mailLocation.length && !filters.mailLocation.includes(d.mail_location)) return false;
+    const q = d.mail_drop_quantity || 0;
+    if (filters.qty.min !== '' && q < Number(filters.qty.min)) return false;
+    if (filters.qty.max !== '' && q > Number(filters.qty.max)) return false;
+    const amt = d.mail_drop_amount || 0;
+    if (filters.dropAmt.min !== '' && amt < Number(filters.dropAmt.min)) return false;
+    if (filters.dropAmt.max !== '' && amt > Number(filters.dropAmt.max)) return false;
+    const post = d.rawPostage || 0;
+    if (filters.postage.min !== '' && post < Number(filters.postage.min)) return false;
+    if (filters.postage.max !== '' && post > Number(filters.postage.max)) return false;
+    return true;
+  }, [filters]);
+
+  const filteredLateDrops   = useMemo(() => lateDrops.filter(passesFilters), [lateDrops, passesFilters]);
+  const filteredFutureDrops = useMemo(() => enrichedFutureDrops.filter(passesFilters), [enrichedFutureDrops, passesFilters]);
+
+  const hasActiveFilters = useMemo(() => {
+    const f = filters;
+    return !!(
+      f.daysLate.min || f.daysLate.max ||
+      f.est.start || f.est.end ||
+      f.customer ||
+      f.product.length || f.orderId.length || f.dropId.length ||
+      f.billVia.length || f.mailLocation.length ||
+      f.qty.min || f.qty.max ||
+      f.dropAmt.min || f.dropAmt.max ||
+      f.postage.min || f.postage.max
+    );
+  }, [filters]);
+
+  // KPI roll-ups — read from filteredLateDrops so the cards react to filters.
+  // Postage is post-EPS-deduction; revenue numbers use the full
+  // mail_drop_amount per the customer's contract regardless of how much has
+  // been collected so far.
   const kpis = useMemo(() => {
-    const totalPostage    = lateDrops.reduce((s, d) => s + d.postageRequired, 0);
-    const prepayRevenue   = lateDrops.filter(d => d.billVia === 'PrePay').reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
-    const net30Revenue    = lateDrops.filter(d => d.billVia === 'NET30').reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
-    const net45Revenue    = lateDrops.filter(d => d.billVia === 'NET45').reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
-    const otherRevenue    = lateDrops.filter(d => d.billVia === 'Other').reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
+    const totalPostage    = filteredLateDrops.reduce((s, d) => s + d.postageRequired, 0);
+    const prepayRevenue   = filteredLateDrops.filter(d => d.billVia === 'PrePay').reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
+    const net30Revenue    = filteredLateDrops.filter(d => d.billVia === 'NET30').reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
+    const net45Revenue    = filteredLateDrops.filter(d => d.billVia === 'NET45').reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
+    const otherRevenue    = filteredLateDrops.filter(d => d.billVia === 'Other').reduce((s, d) => s + (d.mail_drop_amount || 0), 0);
     const termsRevenue    = net30Revenue + net45Revenue + otherRevenue;
     const totalRevenue    = prepayRevenue + termsRevenue;
     return { totalPostage, prepayRevenue, net30Revenue, net45Revenue, otherRevenue, termsRevenue, totalRevenue };
-  }, [lateDrops]);
+  }, [filteredLateDrops]);
 
   // Aging-bucket table for the chart. Each bucket gets postage + revenue
   // split by term, so a stacked-bar chart can show the term mix per bucket.
   const aging = useMemo(() => {
     const empty = () => ({ postage: 0, prepay: 0, net30: 0, net45: 0, other: 0, count: 0 });
     const buckets = Object.fromEntries(AGING_BUCKETS.map(b => [b.key, empty()]));
-    for (const d of lateDrops) {
+    for (const d of filteredLateDrops) {
       const b = bucketFor(d.daysLate);
       const slot = buckets[b.key];
       slot.postage += d.postageRequired;
@@ -268,7 +337,7 @@ export default function LateMailingsPage() {
       other:   +buckets[b.key].other.toFixed(2),
       count:   buckets[b.key].count,
     }));
-  }, [lateDrops]);
+  }, [filteredLateDrops]);
 
   // Postage required by mail location — same `postageRequired` definition
   // every other KPI/chart on this page uses (raw postage with EPS-deducted
@@ -277,7 +346,7 @@ export default function LateMailingsPage() {
   // how the rest of the dashboard treats those rows.
   const postageByLocation = useMemo(() => {
     const sums = new Map();
-    for (const d of lateDrops) {
+    for (const d of filteredLateDrops) {
       const amt = d.postageRequired || 0;
       if (amt <= 0) continue;
       const key = (d.mail_location || '').trim() || 'Unspecified';
@@ -286,7 +355,7 @@ export default function LateMailingsPage() {
     return [...sums.entries()]
       .map(([name, value]) => ({ name, value: +value.toFixed(2) }))
       .sort((a, b) => b.value - a.value);
-  }, [lateDrops]);
+  }, [filteredLateDrops]);
 
   // Fixed palette so the donut stays readable in every theme. Cycle if there
   // are more slices than colors — rare for facilities (typically 3–8). Keeps
@@ -296,83 +365,9 @@ export default function LateMailingsPage() {
     name === 'Unspecified' ? '#94a3b8' : LOCATION_COLORS[idx % LOCATION_COLORS.length];
 
   // Sortable rows. Default is daysLate desc (oldest first). Click a header
-  // to flip the sort or pick a new column.
-  // Available choices for the multi-select filter popovers. Computed from
-  // the combined late + future rows so a filter doesn't go blank when the
-  // user expands the future window.
-  const filterChoices = useMemo(() => {
-    const all = [...lateDrops, ...enrichedFutureDrops];
-    const collect = (key) => {
-      const s = new Set();
-      for (const d of all) {
-        const v = d[key];
-        if (v != null && v !== '') s.add(v);
-      }
-      return [...s].sort((a, b) => String(a).localeCompare(String(b)));
-    };
-    return {
-      product:      collect('product_category'),
-      orderId:      collect('order_id'),
-      dropId:       collect('mail_drop_id'),
-      billVia:      collect('billVia'),
-      mailLocation: collect('mail_location'),
-    };
-  }, [lateDrops, enrichedFutureDrops]);
-
-  // Shared filter predicate — applied to both late and future drops so the
-  // table, KPIs, running total, donut, and CSV export all stay consistent.
-  // Empty inputs are no-ops (don't restrict). Numeric mins/maxes coerce via
-  // Number() so '' / undefined never match a numeric comparison.
-  const passesFilters = useCallback((d) => {
-    // days late (numeric range)
-    if (filters.daysLate.min !== '' && d.daysLate < Number(filters.daysLate.min)) return false;
-    if (filters.daysLate.max !== '' && d.daysLate > Number(filters.daysLate.max)) return false;
-    // est date (string range — YYYY-MM-DD compares lexically just fine)
-    if (filters.est.start && (!d.drop_est_date || d.drop_est_date < filters.est.start)) return false;
-    if (filters.est.end   && (!d.drop_est_date || d.drop_est_date > filters.est.end))   return false;
-    // customer (contains, case-insensitive)
-    if (filters.customer) {
-      const q = filters.customer.toLowerCase();
-      if (!(d.customer_name || '').toLowerCase().includes(q)) return false;
-    }
-    // multi-selects: empty array = "any"
-    if (filters.product.length     && !filters.product.includes(d.product_category)) return false;
-    if (filters.orderId.length     && !filters.orderId.includes(d.order_id))         return false;
-    if (filters.dropId.length      && !filters.dropId.includes(d.mail_drop_id))      return false;
-    if (filters.billVia.length     && !filters.billVia.includes(d.billVia))          return false;
-    if (filters.mailLocation.length && !filters.mailLocation.includes(d.mail_location)) return false;
-    // numeric ranges on row metrics
-    const q = d.mail_drop_quantity || 0;
-    if (filters.qty.min !== '' && q < Number(filters.qty.min)) return false;
-    if (filters.qty.max !== '' && q > Number(filters.qty.max)) return false;
-    const amt = d.mail_drop_amount || 0;
-    if (filters.dropAmt.min !== '' && amt < Number(filters.dropAmt.min)) return false;
-    if (filters.dropAmt.max !== '' && amt > Number(filters.dropAmt.max)) return false;
-    const post = d.rawPostage || 0;
-    if (filters.postage.min !== '' && post < Number(filters.postage.min)) return false;
-    if (filters.postage.max !== '' && post > Number(filters.postage.max)) return false;
-    return true;
-  }, [filters]);
-
-  const filteredLateDrops    = useMemo(() => lateDrops.filter(passesFilters), [lateDrops, passesFilters]);
-  const filteredFutureDrops  = useMemo(() => enrichedFutureDrops.filter(passesFilters), [enrichedFutureDrops, passesFilters]);
-
-  // Quick boolean: are ANY filters active right now? Drives the "Clear all"
-  // button + the row-count summary above the table.
-  const hasActiveFilters = useMemo(() => {
-    const f = filters;
-    return !!(
-      f.daysLate.min || f.daysLate.max ||
-      f.est.start || f.est.end ||
-      f.customer ||
-      f.product.length || f.orderId.length || f.dropId.length ||
-      f.billVia.length || f.mailLocation.length ||
-      f.qty.min || f.qty.max ||
-      f.dropAmt.min || f.dropAmt.max ||
-      f.postage.min || f.postage.max
-    );
-  }, [filters]);
-
+  // to flip the sort or pick a new column. (filterChoices, passesFilters,
+  // filteredLateDrops, filteredFutureDrops, hasActiveFilters all live earlier
+  // in the file so the KPIs + charts can read filteredLateDrops too.)
   const sortedRows = useMemo(() => {
     const rows = [...filteredLateDrops];
     rows.sort((a, b) => {
@@ -548,7 +543,8 @@ export default function LateMailingsPage() {
             {fmt$(kpis.totalPostage)}
           </p>
           <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-            {lateDrops.length} late drop{lateDrops.length === 1 ? '' : 's'}
+            {filteredLateDrops.length} late drop{filteredLateDrops.length === 1 ? '' : 's'}
+            {hasActiveFilters ? <span style={{ color: 'var(--accent)' }}> · filtered from {lateDrops.length}</span> : null}
           </p>
         </div>
 
@@ -558,7 +554,7 @@ export default function LateMailingsPage() {
           <p className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Deferred Revenue (PrePay)</p>
           <p className="text-xl font-bold" style={{ color: 'var(--accent)' }}>{fmt$(kpis.prepayRevenue)}</p>
           <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-            {lateDrops.filter(d => d.billVia === 'PrePay').length} drop{lateDrops.filter(d => d.billVia === 'PrePay').length === 1 ? '' : 's'}
+            {filteredLateDrops.filter(d => d.billVia === 'PrePay').length} drop{filteredLateDrops.filter(d => d.billVia === 'PrePay').length === 1 ? '' : 's'}
           </p>
         </div>
 
