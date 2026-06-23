@@ -1278,21 +1278,53 @@ function isColumnFilterActive(key, f) {
 // (or pressing Esc) closes it.
 function FilterPopover({ active, children, width = 240 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  // Coordinates for the fixed-position popover. We can't use position:absolute
+  // because the table sits inside an `overflow-x-auto` div which silently
+  // forces overflow-y: auto too, clipping any popover that extends past the
+  // visible row area. Fixed positioning escapes that overflow context; we
+  // track the button's rect on open + on scroll/resize to keep alignment.
+  const [coords, setCoords] = useState({ top: 0, left: 0 });
+  const buttonRef = useRef(null);
+  const popoverRef = useRef(null);
+
+  const updateCoords = useCallback(() => {
+    if (!buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    const vw = window.innerWidth;
+    // Clamp right edge so a popover near the right side of the table doesn't
+    // get cut off by the viewport. 8px gutter from the edge.
+    let left = rect.left;
+    if (left + width > vw - 8) left = Math.max(8, vw - width - 8);
+    setCoords({ top: rect.bottom + 4, left });
+  }, [width]);
+
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    updateCoords();
+    const onDoc = (e) => {
+      if (buttonRef.current?.contains(e.target)) return;
+      if (popoverRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
     const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    const onUpdate = () => updateCoords();
     document.addEventListener('mousedown', onDoc);
     document.addEventListener('keydown', onKey);
+    // Capture phase so we catch scrolls in ancestor overflow containers too.
+    window.addEventListener('scroll', onUpdate, true);
+    window.addEventListener('resize', onUpdate);
     return () => {
       document.removeEventListener('mousedown', onDoc);
       document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onUpdate, true);
+      window.removeEventListener('resize', onUpdate);
     };
-  }, [open]);
+  }, [open, updateCoords]);
+
   return (
-    <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', marginLeft: 4 }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', marginLeft: 4 }}>
       <button
+        ref={buttonRef}
         type="button"
         onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
         title={active ? 'Filter active — click to edit' : 'Filter'}
@@ -1304,13 +1336,16 @@ function FilterPopover({ active, children, width = 240 }) {
         {active ? '▼' : '▽'}
       </button>
       {open && (
-        <div onClick={e => e.stopPropagation()}
+        <div ref={popoverRef} onClick={e => e.stopPropagation()}
           style={{
-            position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 200,
+            position: 'fixed', top: coords.top, left: coords.left, zIndex: 200,
             background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8,
             padding: 10, width, boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
             color: 'var(--text-primary)', fontWeight: 400,
             textTransform: 'none', letterSpacing: 0,
+            // Cap the popover's overall height so a giant multi-select can't
+            // run off the bottom of the viewport. Inner content scrolls.
+            maxHeight: 'calc(100vh - 80px)', overflowY: 'auto',
           }}>
           {typeof children === 'function' ? children({ close: () => setOpen(false) }) : children}
         </div>
@@ -1362,7 +1397,13 @@ function TextFilter({ value, onChange, placeholder = 'Contains…' }) {
 // Multi-select with optional search. Used for Product / Bill Via / Mail
 // Location (small, no search needed) AND Order ID / Drop ID (high cardinality,
 // search makes it usable). Values are the option strings themselves.
-function MultiSelectFilter({ options, value, onChange, searchable = false, maxHeight = 240 }) {
+//
+// Sizing rules (the user-requested fix):
+//   • minHeight = ~6 rows so short lists don't collapse and the popover
+//     stops jumping around as the user searches
+//   • maxHeight = 240px with overscroll-behavior contained so scrolling
+//     inside the list never bleeds into the page scroll
+function MultiSelectFilter({ options, value, onChange, searchable = false, minHeight = 168, maxHeight = 240 }) {
   const [query, setQuery] = useState('');
   const filtered = useMemo(() => {
     if (!query.trim()) return options;
@@ -1389,7 +1430,15 @@ function MultiSelectFilter({ options, value, onChange, searchable = false, maxHe
           Clear
         </button>
       </div>
-      <div style={{ maxHeight, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 4 }}>
+      <div style={{
+        minHeight,
+        maxHeight,
+        overflowY: 'auto',
+        overscrollBehavior: 'contain',   // keep wheel events inside the list — no page-jump
+        border: '1px solid var(--border)',
+        borderRadius: 4,
+        background: 'var(--surface2)',
+      }}>
         {filtered.length === 0 ? (
           <div style={{ padding: 8, fontSize: 11, color: 'var(--text-muted)', textAlign: 'center' }}>
             No matches.
@@ -1400,7 +1449,7 @@ function MultiSelectFilter({ options, value, onChange, searchable = false, maxHe
             <label key={String(opt)} style={{
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '4px 8px', cursor: 'pointer', fontSize: 12,
-              background: sel ? 'var(--surface2)' : 'transparent',
+              background: sel ? 'var(--accent-light)' : 'transparent',
               color: 'var(--text-primary)',
             }}>
               <input type="checkbox" checked={sel} onChange={() => toggle(opt)}
