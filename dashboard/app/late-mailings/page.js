@@ -19,7 +19,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { createClient } from '../../lib/supabase';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, PieChart, Pie, Cell,
   Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import { exportToCSV } from '../../lib/export';
@@ -246,6 +246,31 @@ export default function LateMailingsPage() {
     }));
   }, [lateDrops]);
 
+  // Postage required by mail location — same `postageRequired` definition
+  // every other KPI/chart on this page uses (raw postage with EPS-deducted
+  // drops zeroed out, LDP excluded upstream in load()). Sorted desc by $,
+  // zeros filtered, null/empty locations bucketed as "Unspecified" to mirror
+  // how the rest of the dashboard treats those rows.
+  const postageByLocation = useMemo(() => {
+    const sums = new Map();
+    for (const d of lateDrops) {
+      const amt = d.postageRequired || 0;
+      if (amt <= 0) continue;
+      const key = (d.mail_location || '').trim() || 'Unspecified';
+      sums.set(key, (sums.get(key) || 0) + amt);
+    }
+    return [...sums.entries()]
+      .map(([name, value]) => ({ name, value: +value.toFixed(2) }))
+      .sort((a, b) => b.value - a.value);
+  }, [lateDrops]);
+
+  // Fixed palette so the donut stays readable in every theme. Cycle if there
+  // are more slices than colors — rare for facilities (typically 3–8). Keeps
+  // "Unspecified" visually muted so it doesn't dominate the eye when present.
+  const LOCATION_COLORS = ['#2563eb', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#84cc16'];
+  const colorForLocation = (name, idx) =>
+    name === 'Unspecified' ? '#94a3b8' : LOCATION_COLORS[idx % LOCATION_COLORS.length];
+
   // Sortable rows. Default is daysLate desc (oldest first). Click a header
   // to flip the sort or pick a new column.
   const sortedRows = useMemo(() => {
@@ -462,7 +487,7 @@ export default function LateMailingsPage() {
           per bucket stacked by billing term. Both share the same x-axis so
           you can read across to see e.g. "60+ days has $X late and $Y of it
           is on PrePay so cash is sitting deferred". */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
         <div className="rounded-xl p-4 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
           <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>
             Postage Required by Aging Bucket
@@ -503,6 +528,77 @@ export default function LateMailingsPage() {
               <Bar dataKey="other"  name="Other"  stackId="rev" fill="#94a3b8" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+        </div>
+
+        {/* Postage by fulfillment facility — shows which mail location is
+            holding the largest postage liability. Same postageRequired logic
+            (EPS-deducted drops zeroed, LDP excluded) used by every other
+            metric on this page, so the legend totals tie back to the KPI. */}
+        <div className="rounded-xl p-4 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+          <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>
+            Postage Required by Mail Location
+          </h2>
+          {postageByLocation.length === 0 ? (
+            <div className="flex items-center justify-center text-sm" style={{ height: 240, color: 'var(--text-muted)' }}>
+              No postage to attribute.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', height: 240 }}>
+              {/* Donut chart on the left — half the width so the legend has
+                  room to breathe alongside it. innerRadius makes the donut
+                  ring rather than full pie. */}
+              <div style={{ flex: '0 0 50%', height: '100%' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={postageByLocation}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius="55%"
+                      outerRadius="85%"
+                      paddingAngle={1}
+                      stroke="var(--surface)"
+                      strokeWidth={2}>
+                      {postageByLocation.map((entry, i) => (
+                        <Cell key={entry.name} fill={colorForLocation(entry.name, i)} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      formatter={(v, n) => [fmt$(v), n]}
+                      contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              {/* Legend on the right — built manually instead of using Recharts'
+                  Legend so each row can show the exact $ + % per location.
+                  Scroll when there are too many facilities to fit. */}
+              <ul style={{ flex: 1, listStyle: 'none', margin: 0, padding: 0, fontSize: 12, maxHeight: 220, overflowY: 'auto' }}>
+                {(() => {
+                  const total = postageByLocation.reduce((s, r) => s + r.value, 0);
+                  return postageByLocation.map((r, i) => {
+                    const pct = total > 0 ? (r.value / total) * 100 : 0;
+                    return (
+                      <li key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+                        <span style={{
+                          width: 10, height: 10, borderRadius: 2, flexShrink: 0,
+                          background: colorForLocation(r.name, i),
+                        }} />
+                        <span style={{ flex: 1, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {r.name}
+                        </span>
+                        <span style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                          {fmt$(r.value)}
+                        </span>
+                        <span style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', width: 38, textAlign: 'right' }}>
+                          {pct.toFixed(0)}%
+                        </span>
+                      </li>
+                    );
+                  });
+                })()}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
 
