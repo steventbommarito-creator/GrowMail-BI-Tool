@@ -16,7 +16,7 @@
 // isn't 'PrePay' falls under Terms; we further split Terms into NET30 /
 // NET45 / Other for the chart and KPI subtext.
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { createClient } from '../../lib/supabase';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, PieChart, Pie, Cell,
@@ -94,6 +94,30 @@ export default function LateMailingsPage() {
   const [hotTooltip, setHotTooltip] = useState(null);        // null | { dropId, x, y } — hover card
   const [plannedDrops, setPlannedDrops] = useState(new Map()); // mail_drop_id → { planned_date, planned_by }
   const [loading, setLoading] = useState(true);
+
+  // ── Column filters ─────────────────────────────────────────────────────────
+  // One object holding every filter's state. Range filters store {min, max} as
+  // strings (empty = unbounded). Multi-selects store arrays of selected values.
+  // Text filters are "contains" (case-insensitive). The filter step runs once
+  // BEFORE sort + running-total so cumulative postage reflects the filtered
+  // set, not the full backlog.
+  const EMPTY_FILTERS = {
+    daysLate:    { min: '', max: '' },
+    est:         { start: '', end: '' },
+    customer:    '',
+    product:     [],
+    orderId:     [],
+    dropId:      [],
+    billVia:     [],
+    qty:         { min: '', max: '' },
+    dropAmt:     { min: '', max: '' },
+    postage:     { min: '', max: '' },
+    mailLocation:[],
+  };
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const setFilter = (key, value) => setFilters(f => ({ ...f, [key]: value }));
+  const clearFilters = () => setFilters(EMPTY_FILTERS);
+
   const [sortKey, setSortKey] = useState('daysLate');
   const [sortDir, setSortDir] = useState('desc');
   const [planningMode, setPlanningMode] = useState(false);   // Planning Mode toggle
@@ -273,8 +297,84 @@ export default function LateMailingsPage() {
 
   // Sortable rows. Default is daysLate desc (oldest first). Click a header
   // to flip the sort or pick a new column.
+  // Available choices for the multi-select filter popovers. Computed from
+  // the combined late + future rows so a filter doesn't go blank when the
+  // user expands the future window.
+  const filterChoices = useMemo(() => {
+    const all = [...lateDrops, ...enrichedFutureDrops];
+    const collect = (key) => {
+      const s = new Set();
+      for (const d of all) {
+        const v = d[key];
+        if (v != null && v !== '') s.add(v);
+      }
+      return [...s].sort((a, b) => String(a).localeCompare(String(b)));
+    };
+    return {
+      product:      collect('product_category'),
+      orderId:      collect('order_id'),
+      dropId:       collect('mail_drop_id'),
+      billVia:      collect('billVia'),
+      mailLocation: collect('mail_location'),
+    };
+  }, [lateDrops, enrichedFutureDrops]);
+
+  // Shared filter predicate — applied to both late and future drops so the
+  // table, KPIs, running total, donut, and CSV export all stay consistent.
+  // Empty inputs are no-ops (don't restrict). Numeric mins/maxes coerce via
+  // Number() so '' / undefined never match a numeric comparison.
+  const passesFilters = useCallback((d) => {
+    // days late (numeric range)
+    if (filters.daysLate.min !== '' && d.daysLate < Number(filters.daysLate.min)) return false;
+    if (filters.daysLate.max !== '' && d.daysLate > Number(filters.daysLate.max)) return false;
+    // est date (string range — YYYY-MM-DD compares lexically just fine)
+    if (filters.est.start && (!d.drop_est_date || d.drop_est_date < filters.est.start)) return false;
+    if (filters.est.end   && (!d.drop_est_date || d.drop_est_date > filters.est.end))   return false;
+    // customer (contains, case-insensitive)
+    if (filters.customer) {
+      const q = filters.customer.toLowerCase();
+      if (!(d.customer_name || '').toLowerCase().includes(q)) return false;
+    }
+    // multi-selects: empty array = "any"
+    if (filters.product.length     && !filters.product.includes(d.product_category)) return false;
+    if (filters.orderId.length     && !filters.orderId.includes(d.order_id))         return false;
+    if (filters.dropId.length      && !filters.dropId.includes(d.mail_drop_id))      return false;
+    if (filters.billVia.length     && !filters.billVia.includes(d.billVia))          return false;
+    if (filters.mailLocation.length && !filters.mailLocation.includes(d.mail_location)) return false;
+    // numeric ranges on row metrics
+    const q = d.mail_drop_quantity || 0;
+    if (filters.qty.min !== '' && q < Number(filters.qty.min)) return false;
+    if (filters.qty.max !== '' && q > Number(filters.qty.max)) return false;
+    const amt = d.mail_drop_amount || 0;
+    if (filters.dropAmt.min !== '' && amt < Number(filters.dropAmt.min)) return false;
+    if (filters.dropAmt.max !== '' && amt > Number(filters.dropAmt.max)) return false;
+    const post = d.rawPostage || 0;
+    if (filters.postage.min !== '' && post < Number(filters.postage.min)) return false;
+    if (filters.postage.max !== '' && post > Number(filters.postage.max)) return false;
+    return true;
+  }, [filters]);
+
+  const filteredLateDrops    = useMemo(() => lateDrops.filter(passesFilters), [lateDrops, passesFilters]);
+  const filteredFutureDrops  = useMemo(() => enrichedFutureDrops.filter(passesFilters), [enrichedFutureDrops, passesFilters]);
+
+  // Quick boolean: are ANY filters active right now? Drives the "Clear all"
+  // button + the row-count summary above the table.
+  const hasActiveFilters = useMemo(() => {
+    const f = filters;
+    return !!(
+      f.daysLate.min || f.daysLate.max ||
+      f.est.start || f.est.end ||
+      f.customer ||
+      f.product.length || f.orderId.length || f.dropId.length ||
+      f.billVia.length || f.mailLocation.length ||
+      f.qty.min || f.qty.max ||
+      f.dropAmt.min || f.dropAmt.max ||
+      f.postage.min || f.postage.max
+    );
+  }, [filters]);
+
   const sortedRows = useMemo(() => {
-    const rows = [...lateDrops];
+    const rows = [...filteredLateDrops];
     rows.sort((a, b) => {
       const av = a[sortKey];
       const bv = b[sortKey];
@@ -288,7 +388,7 @@ export default function LateMailingsPage() {
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return rows;
-  }, [lateDrops, sortKey, sortDir]);
+  }, [filteredLateDrops, sortKey, sortDir]);
 
   // Running cumulative postage as you scan the table top-to-bottom in the
   // current sort order. Future drops always go at the bottom (chronological)
@@ -300,14 +400,14 @@ export default function LateMailingsPage() {
       running += d.postageRequired;
       return { ...d, runningTotal: +running.toFixed(2) };
     });
-    const futureWithRunning = [...enrichedFutureDrops]
+    const futureWithRunning = [...filteredFutureDrops]
       .sort((a, b) => (a.drop_est_date || '').localeCompare(b.drop_est_date || ''))
       .map(d => {
         running += d.postageRequired;
         return { ...d, runningTotal: +running.toFixed(2) };
       });
     return [...lateWithRunning, ...futureWithRunning];
-  }, [sortedRows, enrichedFutureDrops]);
+  }, [sortedRows, filteredFutureDrops]);
 
   function toggleSort(key) {
     if (sortKey === key) {
@@ -610,8 +710,23 @@ export default function LateMailingsPage() {
           <div className="px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
-                Late Drops ({sortedRows.length}{enrichedFutureDrops.length > 0 ? ` + ${enrichedFutureDrops.length} future` : ''})
+                Late Drops ({sortedRows.length}{hasActiveFilters ? ` of ${lateDrops.length}` : ''}{filteredFutureDrops.length > 0 ? ` + ${filteredFutureDrops.length} future` : ''})
               </h2>
+              {hasActiveFilters && (
+                <button
+                  onClick={clearFilters}
+                  title="Clear every column filter"
+                  className="text-xs px-2 py-0.5 rounded"
+                  style={{
+                    background: 'var(--accent-light)',
+                    color: 'var(--accent)',
+                    border: '1px solid var(--accent)',
+                    cursor: 'pointer',
+                    fontWeight: 500,
+                  }}>
+                  Clear filters ✕
+                </button>
+              )}
               <label style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer', userSelect: 'none' }}>
                 {/* Toggle track */}
                 <span
@@ -726,12 +841,24 @@ export default function LateMailingsPage() {
                   { key: 'postageRequired',    label: 'Postage',    align: 'right' },
                 ].flatMap(col => {
                   const active = sortKey === col.key;
+                  // Render a small filter popover next to the column label for
+                  // every filterable column. The label area stays clickable
+                  // for sort; the popover stops propagation so opening it
+                  // doesn't flip the sort.
+                  const filterUI = renderColumnFilter(col.key, filters, setFilter, filterChoices);
+                  const isFilterActive = isColumnFilterActive(col.key, filters);
                   const th = (
                     <th key={col.key}
-                      onClick={() => toggleSort(col.key)}
-                      className={`px-3 py-2 font-medium cursor-pointer select-none ${col.align === 'right' ? 'text-right' : 'text-left'}`}
+                      className={`px-3 py-2 font-medium select-none ${col.align === 'right' ? 'text-right' : 'text-left'}`}
                       style={{ color: active ? 'var(--accent)' : 'var(--text-secondary)' }}>
-                      {col.label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                      <span onClick={() => toggleSort(col.key)} style={{ cursor: 'pointer' }}>
+                        {col.label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                      </span>
+                      {filterUI && (
+                        <FilterPopover active={isFilterActive} width={filterUI.width}>
+                          {filterUI.body}
+                        </FilterPopover>
+                      )}
                     </th>
                   );
                   // Inject the (non-sortable) Planned column right after Est Date.
@@ -754,11 +881,17 @@ export default function LateMailingsPage() {
                   title="Cumulative postage top-down in the current sort order. Final row = total Postage to Catch Up.">
                   Running Total
                 </th>
-                {/* Mail Location — far-right, sortable */}
-                <th onClick={() => toggleSort('mail_location')}
-                  className="px-3 py-2 font-medium text-left cursor-pointer select-none"
+                {/* Mail Location — far-right, sortable + filterable */}
+                <th className="px-3 py-2 font-medium text-left select-none"
                   style={{ color: sortKey === 'mail_location' ? 'var(--accent)' : 'var(--text-secondary)' }}>
-                  Mail Location{sortKey === 'mail_location' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                  <span onClick={() => toggleSort('mail_location')} style={{ cursor: 'pointer' }}>
+                    Mail Location{sortKey === 'mail_location' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                  </span>
+                  <FilterPopover active={filters.mailLocation.length > 0} width={260}>
+                    <MultiSelectFilter options={filterChoices.mailLocation}
+                      value={filters.mailLocation}
+                      onChange={(v) => setFilter('mailLocation', v)} />
+                  </FilterPopover>
                 </th>
               </tr>
             </thead>
@@ -1092,3 +1225,207 @@ export default function LateMailingsPage() {
     </div>
   );
 }
+
+// ─── Filter dispatch helpers ─────────────────────────────────────────────────
+// Map each sortable col.key to its filter widget + whether it currently has a
+// value. Kept outside the component so the JSX in the thead stays compact.
+function renderColumnFilter(key, filters, setFilter, choices) {
+  switch (key) {
+    case 'daysLate':
+      return { width: 180, body: <RangeFilter value={filters.daysLate} onChange={v => setFilter('daysLate', v)} step="1" /> };
+    case 'drop_est_date':
+      return { width: 200, body: <DateRangeFilter value={filters.est} onChange={v => setFilter('est', v)} /> };
+    case 'customer_name':
+      return { width: 220, body: <TextFilter value={filters.customer} onChange={v => setFilter('customer', v)} placeholder="Contains…" /> };
+    case 'product_category':
+      return { width: 240, body: <MultiSelectFilter options={choices.product} value={filters.product} onChange={v => setFilter('product', v)} /> };
+    case 'order_id':
+      return { width: 260, body: <MultiSelectFilter options={choices.orderId} value={filters.orderId} onChange={v => setFilter('orderId', v)} searchable /> };
+    case 'mail_drop_id':
+      return { width: 260, body: <MultiSelectFilter options={choices.dropId} value={filters.dropId} onChange={v => setFilter('dropId', v)} searchable /> };
+    case 'billVia':
+      return { width: 200, body: <MultiSelectFilter options={choices.billVia} value={filters.billVia} onChange={v => setFilter('billVia', v)} /> };
+    case 'mail_drop_quantity':
+      return { width: 200, body: <RangeFilter value={filters.qty} onChange={v => setFilter('qty', v)} step="1" /> };
+    case 'mail_drop_amount':
+      return { width: 220, body: <RangeFilter value={filters.dropAmt} onChange={v => setFilter('dropAmt', v)} placeholderMin="Min $" placeholderMax="Max $" /> };
+    case 'postageRequired':
+      return { width: 220, body: <RangeFilter value={filters.postage} onChange={v => setFilter('postage', v)} placeholderMin="Min $" placeholderMax="Max $" /> };
+    default:
+      return null;
+  }
+}
+function isColumnFilterActive(key, f) {
+  switch (key) {
+    case 'daysLate':           return f.daysLate.min !== '' || f.daysLate.max !== '';
+    case 'drop_est_date':      return !!f.est.start || !!f.est.end;
+    case 'customer_name':      return !!f.customer;
+    case 'product_category':   return f.product.length > 0;
+    case 'order_id':           return f.orderId.length > 0;
+    case 'mail_drop_id':       return f.dropId.length > 0;
+    case 'billVia':            return f.billVia.length > 0;
+    case 'mail_drop_quantity': return f.qty.min !== '' || f.qty.max !== '';
+    case 'mail_drop_amount':   return f.dropAmt.min !== '' || f.dropAmt.max !== '';
+    case 'postageRequired':    return f.postage.min !== '' || f.postage.max !== '';
+    default:                   return false;
+  }
+}
+
+// ─── Column-filter primitives ────────────────────────────────────────────────
+// Funnel button per column header. When the filter is active (any non-default
+// value) the icon turns accent-color + filled. Click opens an absolutely-
+// positioned popover anchored under the header. Clicking outside the popover
+// (or pressing Esc) closes it.
+function FilterPopover({ active, children, width = 240 }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  return (
+    <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', marginLeft: 4 }}>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+        title={active ? 'Filter active — click to edit' : 'Filter'}
+        style={{
+          background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+          color: active ? 'var(--accent)' : 'var(--text-muted)',
+          fontSize: 11, lineHeight: 1, opacity: active ? 1 : 0.7,
+        }}>
+        {active ? '▼' : '▽'}
+      </button>
+      {open && (
+        <div onClick={e => e.stopPropagation()}
+          style={{
+            position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 200,
+            background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8,
+            padding: 10, width, boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+            color: 'var(--text-primary)', fontWeight: 400,
+            textTransform: 'none', letterSpacing: 0,
+          }}>
+          {typeof children === 'function' ? children({ close: () => setOpen(false) }) : children}
+        </div>
+      )}
+    </span>
+  );
+}
+
+// Two small number inputs side by side. Empty = unbounded on that side.
+function RangeFilter({ value, onChange, placeholderMin = 'Min', placeholderMax = 'Max', step = 'any' }) {
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <input type="number" inputMode="decimal" step={step} value={value.min}
+        onChange={e => onChange({ ...value, min: e.target.value })}
+        placeholder={placeholderMin}
+        style={filterInputStyle} />
+      <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>–</span>
+      <input type="number" inputMode="decimal" step={step} value={value.max}
+        onChange={e => onChange({ ...value, max: e.target.value })}
+        placeholder={placeholderMax}
+        style={filterInputStyle} />
+    </div>
+  );
+}
+
+function DateRangeFilter({ value, onChange }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <label style={{ fontSize: 10, color: 'var(--text-muted)' }}>Start
+        <input type="date" value={value.start} onChange={e => onChange({ ...value, start: e.target.value })}
+          style={{ ...filterInputStyle, width: '100%' }} />
+      </label>
+      <label style={{ fontSize: 10, color: 'var(--text-muted)' }}>End
+        <input type="date" value={value.end} onChange={e => onChange({ ...value, end: e.target.value })}
+          style={{ ...filterInputStyle, width: '100%' }} />
+      </label>
+    </div>
+  );
+}
+
+function TextFilter({ value, onChange, placeholder = 'Contains…' }) {
+  return (
+    <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+      autoFocus
+      style={{ ...filterInputStyle, width: '100%' }} />
+  );
+}
+
+// Multi-select with optional search. Used for Product / Bill Via / Mail
+// Location (small, no search needed) AND Order ID / Drop ID (high cardinality,
+// search makes it usable). Values are the option strings themselves.
+function MultiSelectFilter({ options, value, onChange, searchable = false, maxHeight = 240 }) {
+  const [query, setQuery] = useState('');
+  const filtered = useMemo(() => {
+    if (!query.trim()) return options;
+    const q = query.toLowerCase();
+    return options.filter(o => String(o).toLowerCase().includes(q));
+  }, [options, query]);
+  const selectedSet = new Set(value);
+  const toggle = (opt) => {
+    if (selectedSet.has(opt)) onChange(value.filter(v => v !== opt));
+    else onChange([...value, opt]);
+  };
+  return (
+    <div>
+      {searchable && (
+        <input type="text" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search…"
+          autoFocus
+          style={{ ...filterInputStyle, width: '100%', marginBottom: 6 }} />
+      )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>
+        <span>{value.length} selected{filtered.length !== options.length ? ` · ${filtered.length} of ${options.length}` : ''}</span>
+        <button type="button" onClick={() => onChange([])} disabled={value.length === 0}
+          style={{ background: 'none', border: 'none', cursor: value.length === 0 ? 'default' : 'pointer',
+            color: value.length === 0 ? 'var(--text-muted)' : 'var(--accent)', fontSize: 10, padding: 0 }}>
+          Clear
+        </button>
+      </div>
+      <div style={{ maxHeight, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 4 }}>
+        {filtered.length === 0 ? (
+          <div style={{ padding: 8, fontSize: 11, color: 'var(--text-muted)', textAlign: 'center' }}>
+            No matches.
+          </div>
+        ) : filtered.map(opt => {
+          const sel = selectedSet.has(opt);
+          return (
+            <label key={String(opt)} style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '4px 8px', cursor: 'pointer', fontSize: 12,
+              background: sel ? 'var(--surface2)' : 'transparent',
+              color: 'var(--text-primary)',
+            }}>
+              <input type="checkbox" checked={sel} onChange={() => toggle(opt)}
+                style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} />
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {String(opt)}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Compact input shared across the small filter widgets so they don't look like
+// random form controls bolted onto the table header.
+const filterInputStyle = {
+  background: 'var(--surface2)',
+  border: '1px solid var(--border)',
+  borderRadius: 4,
+  padding: '3px 6px',
+  fontSize: 11,
+  color: 'var(--text-primary)',
+  width: 70,
+  outline: 'none',
+  fontWeight: 400,
+};
