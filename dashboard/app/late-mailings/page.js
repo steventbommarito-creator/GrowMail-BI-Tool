@@ -17,6 +17,7 @@
 // NET45 / Other for the chart and KPI subtext.
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { createClient } from '../../lib/supabase';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, PieChart, Pie, Cell,
@@ -1074,9 +1075,23 @@ export default function LateMailingsPage() {
           Other:  '#94a3b8',
         };
 
-        return (
+        // Render the bar through a portal to document.body. Without this, an
+        // ancestor with transform / filter / perspective up the React tree
+        // would re-base the fixed positioning and the bar could float off-
+        // screen or get clipped by an overflow:hidden parent. Mounting it on
+        // body guarantees `position: fixed` resolves against the viewport.
+        const portalTarget = typeof document !== 'undefined' ? document.body : null;
+        if (!portalTarget) return null;
+
+        return createPortal(
           <div style={{
             position: 'fixed', bottom: 24, right: 28,
+            // Clamp inside the viewport — never let the bar tower past the
+            // top of the screen on small viewports (max-height) and never
+            // run past the left edge on narrow ones (max-width).
+            maxHeight: 'calc(100vh - 48px)',
+            overflowY: 'auto',
+            overscrollBehavior: 'contain',
             background: 'var(--surface)',
             border: '1px solid var(--border)',
             borderRadius: 10,
@@ -1162,7 +1177,8 @@ export default function LateMailingsPage() {
                 Export CSV
               </button>
             </div>
-          </div>
+          </div>,
+          portalTarget
         );
       })()}
 
