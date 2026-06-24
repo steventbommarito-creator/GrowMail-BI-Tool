@@ -530,7 +530,9 @@ export default function LateMailingsPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-[1400px] mx-auto">
+    // Bottom padding when Planning Mode is on so the docked footer bar
+    // doesn't cover the last table row when the user scrolls to the bottom.
+    <div className="space-y-6 max-w-[1400px] mx-auto" style={{ paddingBottom: planningMode && planSelected.size > 0 ? 96 : 0 }}>
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>Late Mailings</h1>
@@ -1083,100 +1085,98 @@ export default function LateMailingsPage() {
         const portalTarget = typeof document !== 'undefined' ? document.body : null;
         if (!portalTarget) return null;
 
+        // Docked footer bar: spans the bottom of the viewport, anchored
+        // bottom: 0 so it's always pinned to the bottom edge regardless of
+        // page scroll. Horizontal-only layout keeps height fixed (~64px) so
+        // the bar can never grow tall enough to be cut off vertically.
+        // Horizontal-scroll fallback handles the rare case where lots of
+        // bill-via buckets push the content wider than the viewport.
         return createPortal(
           <div style={{
-            position: 'fixed', bottom: 24, right: 28,
-            // Clamp inside the viewport — never let the bar tower past the
-            // top of the screen on small viewports (max-height) and never
-            // run past the left edge on narrow ones (max-width).
-            maxHeight: 'calc(100vh - 48px)',
-            overflowY: 'auto',
-            overscrollBehavior: 'contain',
+            position: 'fixed',
+            bottom: 0, left: 0, right: 0,
             background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 10,
-            padding: '14px 18px',
-            display: 'flex', flexDirection: 'column', gap: 10,
-            boxShadow: '0 4px 24px rgba(0,0,0,0.35)',
+            borderTop: '1px solid var(--border)',
+            boxShadow: '0 -4px 16px rgba(0,0,0,0.25)',
             zIndex: 9000,
-            minWidth: 420, maxWidth: 'min(560px, calc(100vw - 56px))',
+            padding: '10px 20px',
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 20,
+            overflowX: 'auto',
+            overflowY: 'hidden',
+            whiteSpace: 'nowrap',
+            overscrollBehavior: 'contain',
           }}>
-            {/* Headline stats: count · postage · collections-total */}
-            <div style={{ display: 'flex', gap: 28, alignItems: 'flex-end' }}>
-              <Stat label="Selected" value={`${planSelected.size} drop${planSelected.size !== 1 ? 's' : ''}`} />
-              <Stat label="Postage" value={fmt$(planPostageTotal)} />
-              <Stat label="Collections" value={fmt$(collections.total)}
-                tooltip="Expected collections from the selected drops. PrePay rows are deduped by order_id so multi-drop orders don't overcount." />
-            </div>
+            <Stat label="Selected" value={`${planSelected.size} drop${planSelected.size !== 1 ? 's' : ''}`} />
+            <DividerV />
+            <Stat label="Postage" value={fmt$(planPostageTotal)} />
+            <DividerV />
+            <Stat label="Collections" value={fmt$(collections.total)}
+              tooltip="Expected collections from the selected drops. PrePay rows are deduped by order_id so multi-drop orders don't overcount." />
 
-            {/* Bill Via breakdown — only renders buckets that have a value */}
-            <div style={{
-              display: 'flex', gap: 12, flexWrap: 'wrap',
-              borderTop: '1px solid var(--border)', paddingTop: 8,
-            }}>
-              {Object.entries(collections.buckets).map(([term, amount]) => {
-                if (amount === 0 && collections.counts[term] === 0) return null;
-                const label = term === 'PrePay'
-                  ? `${collections.counts[term]} order${collections.counts[term] !== 1 ? 's' : ''}`
-                  : `${collections.counts[term]} drop${collections.counts[term] !== 1 ? 's' : ''}`;
-                return (
-                  <div key={term}
-                    title={term === 'PrePay'
-                      ? 'PrePay: sum of unique order remainders. Multiple drops on the same PrePay order share one remaining balance, so they count once here.'
-                      : `${term}: sum of mail_drop_amount across selected drops (one NetSuite invoice per drop).`}
-                    style={{
-                      display: 'flex', flexDirection: 'column',
-                      borderLeft: `3px solid ${BILL_VIA_COLORS[term]}`,
-                      paddingLeft: 8,
-                      minWidth: 90,
-                    }}>
-                    <span style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.3 }}>
-                      {term}
-                    </span>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
-                      {fmt$(amount)}
-                    </span>
-                    <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{label}</span>
-                  </div>
-                );
-              })}
-            </div>
+            {Object.entries(collections.buckets).map(([term, amount]) => {
+              if (amount === 0 && collections.counts[term] === 0) return null;
+              const label = term === 'PrePay'
+                ? `${collections.counts[term]} order${collections.counts[term] !== 1 ? 's' : ''}`
+                : `${collections.counts[term]} drop${collections.counts[term] !== 1 ? 's' : ''}`;
+              return (
+                <div key={term}
+                  title={term === 'PrePay'
+                    ? 'PrePay: sum of unique order remainders. Multiple drops on the same PrePay order share one remaining balance, so they count once here.'
+                    : `${term}: sum of mail_drop_amount across selected drops (one NetSuite invoice per drop).`}
+                  style={{
+                    display: 'flex', flexDirection: 'column',
+                    borderLeft: `3px solid ${BILL_VIA_COLORS[term]}`,
+                    paddingLeft: 8, flexShrink: 0,
+                  }}>
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.3 }}>
+                    {term}
+                  </span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
+                    {fmt$(amount)}
+                  </span>
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{label}</span>
+                </div>
+              );
+            })}
 
-            {/* Action buttons */}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => setSavePlanModal({ date: today })}
-                style={{
-                  padding: '8px 16px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
-                  background: 'var(--status-ok)', border: 'none', color: '#fff', fontWeight: 600,
-                  whiteSpace: 'nowrap',
-                }}>
-                Save Plan
-              </button>
-              <button
-                onClick={() => {
-                  const rows = selectedDrops.map(d => ({
-                    'Est Date':         d.drop_est_date || '',
-                    'Customer':         d.customer_name || '',
-                    'Product':          d.product_category || '',
-                    'Order ID':         d.order_id || '',
-                    'Drop ID':          d.mail_drop_id || '',
-                    'Bill Via':         d.billVia,
-                    'Qty':              d.mail_drop_quantity ?? '',
-                    'Postage':          (d.rawPostage || 0).toFixed(2),
-                    'Remaining Balance':(d.remainingBalance || 0).toFixed(2),
-                    'Mail Location':    d.mail_location || '',
-                  }));
-                  exportToCSV(rows, `late-mailings-plan-${new Date().toISOString().split('T')[0]}`);
-                }}
-                style={{
-                  padding: '8px 16px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
-                  background: 'var(--accent)', border: 'none', color: '#fff', fontWeight: 600,
-                  whiteSpace: 'nowrap',
-                }}>
-                Export CSV
-              </button>
-            </div>
+            {/* Spacer pushes the buttons to the right edge */}
+            <div style={{ flex: 1, minWidth: 12 }} />
+
+            <button
+              onClick={() => setSavePlanModal({ date: today })}
+              style={{
+                padding: '8px 16px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                background: 'var(--status-ok)', border: 'none', color: '#fff', fontWeight: 600,
+                whiteSpace: 'nowrap', flexShrink: 0,
+              }}>
+              Save Plan
+            </button>
+            <button
+              onClick={() => {
+                const rows = selectedDrops.map(d => ({
+                  'Est Date':         d.drop_est_date || '',
+                  'Customer':         d.customer_name || '',
+                  'Product':          d.product_category || '',
+                  'Order ID':         d.order_id || '',
+                  'Drop ID':          d.mail_drop_id || '',
+                  'Bill Via':         d.billVia,
+                  'Qty':              d.mail_drop_quantity ?? '',
+                  'Postage':          (d.rawPostage || 0).toFixed(2),
+                  'Remaining Balance':(d.remainingBalance || 0).toFixed(2),
+                  'Mail Location':    d.mail_location || '',
+                }));
+                exportToCSV(rows, `late-mailings-plan-${new Date().toISOString().split('T')[0]}`);
+              }}
+              style={{
+                padding: '8px 16px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                background: 'var(--accent)', border: 'none', color: '#fff', fontWeight: 600,
+                whiteSpace: 'nowrap', flexShrink: 0,
+              }}>
+              Export CSV
+            </button>
           </div>,
           portalTarget
         );
@@ -1393,20 +1393,25 @@ function isColumnFilterActive(key, f) {
 // value) the icon turns accent-color + filled. Click opens an absolutely-
 // positioned popover anchored under the header. Clicking outside the popover
 // (or pressing Esc) closes it.
-// Compact label-over-value stat used in the Planning Mode floating bar
-// headline (Selected · Postage · Collections). Kept here so the bar JSX
-// stays readable.
+// Compact label-over-value stat used in the Planning Mode footer bar.
+// flexShrink: 0 so stats never get squeezed when the bar is narrow —
+// instead the bar's overflow-x kicks in and provides horizontal scroll.
 function Stat({ label, value, tooltip }) {
   return (
-    <div title={tooltip}>
+    <div title={tooltip} style={{ flexShrink: 0 }}>
       <p style={{ margin: 0, fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.3 }}>
         {label}
       </p>
-      <p style={{ margin: '2px 0 0', fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+      <p style={{ margin: '2px 0 0', fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
         {value}
       </p>
     </div>
   );
+}
+
+// Thin vertical separator between sections of the footer bar.
+function DividerV() {
+  return <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--border)', flexShrink: 0 }} />;
 }
 
 function FilterPopover({ active, children, width = 240 }) {
