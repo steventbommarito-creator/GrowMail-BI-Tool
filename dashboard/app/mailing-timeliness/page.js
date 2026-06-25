@@ -359,8 +359,8 @@ export default function MailingTimelinessPage() {
   }, [drops, grain]);
 
   // ── Breakdowns (Mail Location + Mail Method) ───────────────────────────
-  const breakdownByLocation = useMemo(() => buildBreakdown(drops, 'mail_location'), [drops]);
-  const breakdownByMethod   = useMemo(() => buildBreakdown(drops, 'mail_method'),   [drops]);
+  const breakdownByLocation = useMemo(() => buildBreakdown(drops, 'mail_location'),    [drops]);
+  const breakdownByProduct  = useMemo(() => buildBreakdown(drops, 'product_category'), [drops]);
 
   // ── Sortable period table ──────────────────────────────────────────────
   const sortedPeriods = useMemo(() => {
@@ -566,8 +566,8 @@ export default function MailingTimelinessPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <BreakdownCard title="On-Time Rate by Mail Location"
           rows={breakdownByLocation} loading={loading} />
-        <BreakdownCard title="On-Time Rate by Mail Method"
-          rows={breakdownByMethod} loading={loading} />
+        <BreakdownCard title="On-Time Rate by Product"
+          rows={breakdownByProduct} loading={loading} />
       </div>
 
       {/* Period detail table */}
