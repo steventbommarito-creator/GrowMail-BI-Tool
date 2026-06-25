@@ -118,6 +118,7 @@ function passesLdpRule(drop) {
 // label. Add more entries here if other facilities get reclassified.
 const MAIL_LOCATION_ALIASES = {
   'Las Vegas Color': 'Kaleidoscope',
+  'Unspecified':     'Valassis',
 };
 function normalizeMailLocation(loc) {
   if (!loc) return loc;
@@ -127,6 +128,30 @@ function normalizeMailLocation(loc) {
 // Status exclusions are uniform across the page — pre-sale / dead orders
 // shouldn't dilute timeliness numbers.
 const EXCLUDED_ORDER_STATUSES = new Set(['CANCELED', 'VOID']);
+
+// Aging buckets — same definitions the Late Mailings page uses so the
+// Past-Due KPI breakdown reads the same as that page's bar chart.
+const AGING_BUCKETS = [
+  { key: '1-7',   label: '1–7 d',   min: 1,  max: 7   },
+  { key: '8-14',  label: '8–14 d',  min: 8,  max: 14  },
+  { key: '15-30', label: '15–30 d', min: 15, max: 30  },
+  { key: '31-60', label: '31–60 d', min: 31, max: 60  },
+  { key: '60+',   label: '60+ d',   min: 61, max: Infinity },
+];
+function bucketForDays(daysLate) {
+  return AGING_BUCKETS.find(b => daysLate >= b.min && daysLate <= b.max) || AGING_BUCKETS[AGING_BUCKETS.length - 1];
+}
+// Color scale — gets redder as drops sit longer. Mirrors the late-mailings
+// daysLateColor helper but exposed as a per-bucket attribute so the small
+// KPI grid can highlight oldest buckets in critical red without needing a
+// shared util.
+function bucketColor(key) {
+  if (key === '1-7')   return 'var(--status-warn)';
+  if (key === '8-14')  return 'var(--status-warn)';
+  if (key === '15-30') return '#ea7c45';
+  if (key === '31-60') return 'var(--status-critical)';
+  return 'var(--status-critical)';
+}
 
 // Active production statuses — same set the Late Mailings page uses to
 // define "in flight". The past-due snapshot KPI uses these so its count
@@ -258,6 +283,15 @@ export default function MailingTimelinessPage() {
       ? pastDueWithDays.reduce((s, d) => s + (d._daysLateNow || 0), 0) / pastDueWithDays.length
       : null;
 
+    // Per-bucket counts so the KPI card can show the aging distribution
+    // instead of a single average. Same buckets as the Late Mailings page.
+    const pastDueBuckets = AGING_BUCKETS.map(b => ({ ...b, count: 0 }));
+    for (const d of pastDueWithDays) {
+      const b = bucketForDays(d._daysLateNow || 0);
+      const row = pastDueBuckets.find(x => x.key === b.key);
+      if (row) row.count += 1;
+    }
+
     // Trailing on-time rate across the full visible date range
     const total = drops.length;
     const onTime = drops.filter(d => categorize(d.drop_est_date, d.drop_act_date) === 'ontime').length;
@@ -282,6 +316,7 @@ export default function MailingTimelinessPage() {
     return {
       pastDueCount:    pastDueWithDays.length,
       pastDueAvgDays,
+      pastDueBuckets,
       trailingOnTime,
       trailingTotal:   total,
       lastPeriodKey:   lastKey,
@@ -371,9 +406,28 @@ export default function MailingTimelinessPage() {
           <p className="text-2xl font-bold" style={{ color: 'var(--status-warn)' }}>
             {fmtN(kpis.pastDueCount)} drop{kpis.pastDueCount === 1 ? '' : 's'}
           </p>
-          <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-            Avg {kpis.pastDueAvgDays != null ? `${kpis.pastDueAvgDays.toFixed(1)} days late` : '—'} so far
-          </p>
+          {/* Aging-bucket breakdown — same buckets the Late Mailings page
+              uses. Each bucket shows the count tinted by severity, with
+              the bucket label below in muted text. Buckets with zero
+              count are rendered too so the layout stays stable. */}
+          <div style={{
+            display: 'grid', gridTemplateColumns: `repeat(${kpis.pastDueBuckets?.length || 5}, 1fr)`,
+            gap: 4, marginTop: 10,
+          }}>
+            {(kpis.pastDueBuckets || []).map(b => (
+              <div key={b.key} title={`${b.label}: ${fmtN(b.count)} drop${b.count === 1 ? '' : 's'}`}
+                style={{ textAlign: 'center', padding: '2px 0', borderTop: `2px solid ${bucketColor(b.key)}` }}>
+                <p style={{ margin: 0, fontSize: 13, fontWeight: 700,
+                  color: b.count > 0 ? 'var(--text-primary)' : 'var(--text-muted)',
+                  fontVariantNumeric: 'tabular-nums' }}>
+                  {fmtN(b.count)}
+                </p>
+                <p style={{ margin: 0, fontSize: 9, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                  {b.label}
+                </p>
+              </div>
+            ))}
+          </div>
         </KpiCard>
 
         <KpiCard title="Last Completed Period" loading={loading}
