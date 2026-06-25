@@ -150,6 +150,7 @@ export default function MailingTimelinessPage() {
   const [expanded, setExpanded] = useState({});              // periodKey -> bool
   const [sortKey, setSortKey] = useState('period');
   const [sortDir, setSortDir] = useState('desc');
+  const [drillPeriod, setDrillPeriod] = useState(null);      // period clicked on the chart — opens drop matrix modal
 
   // ── Loaders ────────────────────────────────────────────────────────────
   //
@@ -433,24 +434,39 @@ export default function MailingTimelinessPage() {
           <div style={{ height: 320, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
             No completed drops in the selected range.
           </div>
-        ) : (
+        ) : (<>
           <ResponsiveContainer width="100%" height={320}>
-            <ComposedChart data={periods}>
+            <ComposedChart data={periods}
+              onClick={(state) => {
+                // Recharts hands us the activePayload for whatever bar/line
+                // is under the cursor. The .payload is the original row,
+                // which IS our period object, so we can set drill directly.
+                const payload = state?.activePayload?.[0]?.payload;
+                if (payload?.key) {
+                  const fresh = periods.find(p => p.key === payload.key) || payload;
+                  setDrillPeriod(fresh);
+                }
+              }}
+              style={{ cursor: 'pointer' }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} angle={-30} textAnchor="end" height={60} />
               <YAxis yAxisId="left"  tick={{ fontSize: 11, fill: 'var(--text-muted)' }} label={{ value: 'Drops', angle: -90, position: 'insideLeft', fill: 'var(--text-muted)', fontSize: 11 }} />
               <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} label={{ value: 'Avg days vs est', angle: 90, position: 'insideRight', fill: 'var(--text-muted)', fontSize: 11 }} />
               <Tooltip
-                formatter={(v, n) => n === 'Avg Days vs Est' ? [fmtDays(v), n] : [fmtN(v), n]}
+                cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+                formatter={(v, n) => n === 'Avg Days vs Est (signed)' ? [fmtDays(v), n] : [fmtN(v), n]}
                 contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar  yAxisId="left" dataKey="ontime" name="On Time (incl. Early)" stackId="a" fill="#16a34a" />
-              <Bar  yAxisId="left" dataKey="late"   name="Late"                  stackId="a" fill="#dc2626" radius={[3, 3, 0, 0]} />
+              <Bar  yAxisId="left" dataKey="ontime" name="On Time (incl. Early)" stackId="a" fill="#16a34a" cursor="pointer" />
+              <Bar  yAxisId="left" dataKey="late"   name="Late"                  stackId="a" fill="#dc2626" radius={[3, 3, 0, 0]} cursor="pointer" />
               <Line yAxisId="right" type="monotone" dataKey="avgDays" name="Avg Days vs Est (signed)"
                 stroke="var(--text-primary)" strokeWidth={2} dot={{ r: 3 }} />
             </ComposedChart>
           </ResponsiveContainer>
-        )}
+          <p className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>
+            Tip: click any bar (or anywhere over its period) to open a drop-by-drop matrix for that week / month.
+          </p>
+        </>)}
       </div>
 
       {/* Breakdown row */}
@@ -513,6 +529,14 @@ export default function MailingTimelinessPage() {
           </table>
         </div>
       </div>
+
+      {/* Drill-down modal — opens when the user clicks a chart bar.
+          Surfaces every drop that mailed in that period with a matrix
+          the user can scroll/sort/export to confirm the numbers. */}
+      {drillPeriod && (
+        <PeriodDrillModal period={drillPeriod} grain={grain}
+          onClose={() => setDrillPeriod(null)} />
+      )}
     </div>
   );
 }
@@ -681,5 +705,189 @@ function PeriodRow({ period, isExp, onToggle }) {
         </tr>
       )}
     </>
+  );
+}
+
+// ─── Period drill-down modal ────────────────────────────────────────────────
+// Click any bar in the historical chart → this modal pops up showing every
+// drop that mailed in that period as a matrix. Columns per user spec:
+// Actual mail date · Est mail date · Delta · Order # · Drop ID · Customer ·
+// Product type · Mail location.
+//
+// Sortable by clicking any column header. Defaults to delta-desc so the
+// worst-late drops are at the top — fastest path to investigating outliers.
+// CSV export of the visible matrix (full set, not the on-screen page) is
+// available so the user can take the data into Excel.
+function PeriodDrillModal({ period, grain, onClose }) {
+  const [sortKey, setSortKey] = useState('delta');
+  const [sortDir, setSortDir] = useState('desc');
+
+  // Close on Escape.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  // Build the matrix rows once — keep raw fields the column headers expect.
+  const rows = useMemo(() => {
+    return (period.drops || []).map(d => ({
+      mail_drop_id:    d.mail_drop_id,
+      order_id:        d.order_id,
+      customer_name:   d.customer_name,
+      product_category:d.product_category,
+      mail_location:   d.mail_location,
+      mail_method:     d.mail_method,
+      drop_est_date:   d.drop_est_date,
+      drop_act_date:   d.drop_act_date,
+      delta:           daysBetween(d.drop_est_date, d.drop_act_date),
+    }));
+  }, [period]);
+
+  const sorted = useMemo(() => {
+    const arr = [...rows];
+    arr.sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      let cmp;
+      if (typeof av === 'number' && typeof bv === 'number') cmp = av - bv;
+      else cmp = String(av ?? '').localeCompare(String(bv ?? ''));
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return arr;
+  }, [rows, sortKey, sortDir]);
+
+  function toggle(key) {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir(key === 'delta' || key === 'drop_act_date' ? 'desc' : 'asc'); }
+  }
+
+  function handleExport() {
+    const out = sorted.map(r => ({
+      'Actual Mail Date': r.drop_act_date || '',
+      'Est Mail Date':    r.drop_est_date || '',
+      'Delta (days)':     r.delta ?? '',
+      'Order #':          r.order_id || '',
+      'Drop ID':          r.mail_drop_id || '',
+      'Customer':         r.customer_name || '',
+      'Product':          r.product_category || '',
+      'Mail Location':    r.mail_location || '',
+      'Mail Method':      r.mail_method || '',
+    }));
+    exportToCSV(out, `mailing-timeliness-${grain}-${period.key}-drops`);
+  }
+
+  const lateCount = rows.filter(r => (r.delta || 0) > 0).length;
+  const onTimeCount = rows.length - lateCount;
+  const avgDelta = rows.length > 0 ? rows.reduce((s, r) => s + (r.delta || 0), 0) / rows.length : 0;
+
+  const cols = [
+    { key: 'drop_act_date',     label: 'Actual Mail Date', align: 'left',  fmt: v => ET(v) },
+    { key: 'drop_est_date',     label: 'Est Mail Date',    align: 'left',  fmt: v => ET(v) },
+    { key: 'delta',             label: 'Delta',            align: 'right', fmt: v => fmtDays(v) },
+    { key: 'order_id',          label: 'Order #',          align: 'left',  fmt: v => v || '—' },
+    { key: 'mail_drop_id',      label: 'Drop ID',          align: 'left',  fmt: v => v || '—' },
+    { key: 'customer_name',     label: 'Customer',         align: 'left',  fmt: v => v || '—' },
+    { key: 'product_category',  label: 'Product',          align: 'left',  fmt: v => v || '—' },
+    { key: 'mail_location',     label: 'Mail Location',    align: 'left',  fmt: v => v || '—' },
+  ];
+
+  return (
+    <div onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+        padding: 24,
+      }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{
+          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12,
+          width: 1080, maxWidth: '96vw', maxHeight: '92vh',
+          display: 'flex', flexDirection: 'column',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+        }}>
+        {/* Header */}
+        <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div>
+            <p style={{ margin: 0, fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>
+              {period.label} — Drops Mailed
+            </p>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
+              {fmtN(rows.length)} drop{rows.length === 1 ? '' : 's'} · {onTimeCount} on time · {lateCount} late · avg delta {fmtDays(avgDelta)} day{Math.abs(avgDelta - 1) > 0.05 ? 's' : ''}
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={handleExport}
+              style={{ padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+              Export CSV
+            </button>
+            <button onClick={onClose}
+              style={{ padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+              Close
+            </button>
+          </div>
+        </div>
+
+        {/* Matrix */}
+        <div style={{ overflow: 'auto', flex: 1 }}>
+          {rows.length === 0 ? (
+            <p className="px-5 py-12 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
+              No drops in this period.
+            </p>
+          ) : (
+            <table className="w-full text-xs" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
+              <thead style={{ position: 'sticky', top: 0, background: 'var(--surface2)', zIndex: 1 }}>
+                <tr>
+                  {cols.map(col => {
+                    const active = sortKey === col.key;
+                    return (
+                      <th key={col.key} onClick={() => toggle(col.key)}
+                        className={`px-3 py-2 font-medium cursor-pointer select-none ${col.align === 'right' ? 'text-right' : 'text-left'}`}
+                        style={{
+                          color: active ? 'var(--accent)' : 'var(--text-secondary)',
+                          borderBottom: '1px solid var(--border)',
+                          whiteSpace: 'nowrap',
+                        }}>
+                        {col.label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map(r => (
+                  <tr key={r.mail_drop_id} style={{ borderTop: '1px solid var(--border)' }}>
+                    {cols.map(col => {
+                      const v = r[col.key];
+                      const isDelta = col.key === 'delta';
+                      return (
+                        <td key={col.key}
+                          className={`px-3 py-1.5 ${col.align === 'right' ? 'text-right' : 'text-left'}`}
+                          style={{
+                            color: isDelta
+                              ? (v > 0 ? 'var(--status-critical)' : v < 0 ? 'var(--status-ok)' : 'var(--text-primary)')
+                              : (col.key === 'customer_name' ? 'var(--text-primary)' : 'var(--text-secondary)'),
+                            fontFamily: (col.key === 'order_id' || col.key === 'mail_drop_id') ? 'monospace' : 'inherit',
+                            fontVariantNumeric: isDelta ? 'tabular-nums' : 'normal',
+                            fontWeight: isDelta && v > 0 ? 600 : 'normal',
+                            whiteSpace: 'nowrap',
+                          }}>
+                          {col.key === 'order_id' && v
+                            ? <OspreyOrderLink id={v} />
+                            : col.key === 'mail_drop_id' && v
+                              ? <OspreyDropLink id={v} />
+                              : col.fmt(v)}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
