@@ -112,6 +112,18 @@ function passesLdpRule(drop) {
   return Number(drop.actual_postage) > 0;
 }
 
+// Mail location aliases — silent rewrites for known mislabels in the report.
+// Applied at the load() step so every downstream consumer (breakdown card,
+// period bucketing, table, drill-down modal, CSV export) sees the canonical
+// label. Add more entries here if other facilities get reclassified.
+const MAIL_LOCATION_ALIASES = {
+  'Las Vegas Color': 'Kaleidoscope',
+};
+function normalizeMailLocation(loc) {
+  if (!loc) return loc;
+  return MAIL_LOCATION_ALIASES[loc.trim()] || loc;
+}
+
 // Status exclusions are uniform across the page — pre-sale / dead orders
 // shouldn't dilute timeliness numbers.
 const EXCLUDED_ORDER_STATUSES = new Set(['CANCELED', 'VOID']);
@@ -215,10 +227,18 @@ export default function MailingTimelinessPage() {
       }
     }
 
-    setDrops(completedRows.filter(d => !EXCLUDED_ORDER_STATUSES.has(d.order_status) && passesLdpRule(d)));
+    // Normalize mail_location aliases on every row before they hit state so
+    // the rest of the page reads a single canonical label per facility.
+    const normalize = (d) => ({ ...d, mail_location: normalizeMailLocation(d.mail_location) });
+
+    setDrops(completedRows
+      .filter(d => !EXCLUDED_ORDER_STATUSES.has(d.order_status) && passesLdpRule(d))
+      .map(normalize));
     // Past-due drops drop ALL LDP rows (not the postage-gated rule), matching
     // the Late Mailings page so the snapshot count is identical.
-    setPastDue(pastDueRows.filter(d => !isLdpDrop(d)));
+    setPastDue(pastDueRows
+      .filter(d => !isLdpDrop(d))
+      .map(normalize));
     setLoading(false);
   }, [range.start, range.end]);
 
