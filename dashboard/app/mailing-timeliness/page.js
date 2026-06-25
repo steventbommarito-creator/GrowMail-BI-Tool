@@ -129,6 +129,14 @@ function normalizeMailLocation(loc) {
 // shouldn't dilute timeliness numbers.
 const EXCLUDED_ORDER_STATUSES = new Set(['CANCELED', 'VOID']);
 
+// Product types excluded from this page entirely (both the historical view
+// and the past-due snapshot). New Mover Postcards are not reported here per
+// the user. Matched case-insensitively against product_category.
+const EXCLUDED_PRODUCTS = new Set(['new mover postcard']);
+function isExcludedProduct(drop) {
+  return EXCLUDED_PRODUCTS.has((drop.product_category || '').trim().toLowerCase());
+}
+
 // Aging buckets — same definitions the Late Mailings page uses so the
 // Past-Due KPI breakdown reads the same as that page's bar chart.
 const AGING_BUCKETS = [
@@ -257,12 +265,14 @@ export default function MailingTimelinessPage() {
     const normalize = (d) => ({ ...d, mail_location: normalizeMailLocation(d.mail_location) });
 
     setDrops(completedRows
-      .filter(d => !EXCLUDED_ORDER_STATUSES.has(d.order_status) && passesLdpRule(d))
+      .filter(d => !EXCLUDED_ORDER_STATUSES.has(d.order_status) && !isExcludedProduct(d) && passesLdpRule(d))
       .map(normalize));
     // Past-due drops drop ALL LDP rows (not the postage-gated rule), matching
-    // the Late Mailings page so the snapshot count is identical.
+    // the Late Mailings page so the snapshot count is identical. New Mover
+    // Postcards are also excluded here so the snapshot matches the rest of
+    // the page.
     setPastDue(pastDueRows
-      .filter(d => !isLdpDrop(d))
+      .filter(d => !isLdpDrop(d) && !isExcludedProduct(d))
       .map(normalize));
     setLoading(false);
   }, [range.start, range.end]);
