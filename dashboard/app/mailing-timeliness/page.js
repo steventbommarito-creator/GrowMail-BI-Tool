@@ -371,6 +371,18 @@ export default function MailingTimelinessPage() {
     else { setSortKey(key); setSortDir(key === 'period' ? 'desc' : 'desc'); }
   }
 
+  // Opens the drill-down modal for a clicked bar. Recharts passes the data
+  // entry directly to a Bar's onClick (period fields are spread onto it),
+  // but arg shapes vary across versions — accept either the entry itself or
+  // an object with a .payload. We re-resolve against `periods` by key so the
+  // modal always gets the freshest copy (with the full drops array).
+  const openDrill = useCallback((entry) => {
+    const key = entry?.key ?? entry?.payload?.key;
+    if (!key) return;
+    const fresh = periods.find(p => p.key === key);
+    if (fresh) setDrillPeriod(fresh);
+  }, [periods]);
+
   function handleExport() {
     const rows = sortedPeriods.map(p => ({
       'Period':     p.label,
@@ -510,18 +522,7 @@ export default function MailingTimelinessPage() {
           </div>
         ) : (<>
           <ResponsiveContainer width="100%" height={320}>
-            <ComposedChart data={periods}
-              onClick={(state) => {
-                // Recharts hands us the activePayload for whatever bar/line
-                // is under the cursor. The .payload is the original row,
-                // which IS our period object, so we can set drill directly.
-                const payload = state?.activePayload?.[0]?.payload;
-                if (payload?.key) {
-                  const fresh = periods.find(p => p.key === payload.key) || payload;
-                  setDrillPeriod(fresh);
-                }
-              }}
-              style={{ cursor: 'pointer' }}>
+            <ComposedChart data={periods} barCategoryGap="10%">
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} angle={-30} textAnchor="end" height={60} />
               <YAxis yAxisId="left"  tick={{ fontSize: 11, fill: 'var(--text-muted)' }} label={{ value: 'Drops', angle: -90, position: 'insideLeft', fill: 'var(--text-muted)', fontSize: 11 }} />
@@ -531,10 +532,18 @@ export default function MailingTimelinessPage() {
                 formatter={(v, n) => n === 'Avg Days vs Est (signed)' ? [fmtDays(v), n] : [fmtN(v), n]}
                 contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar  yAxisId="left" dataKey="ontime" name="On Time (incl. Early)" stackId="a" fill="#16a34a" cursor="pointer" />
-              <Bar  yAxisId="left" dataKey="late"   name="Late"                  stackId="a" fill="#dc2626" radius={[3, 3, 0, 0]} cursor="pointer" />
+              {/* Per-Bar onClick is far more reliable than the chart-level
+                  handler (which depends on activePayload being populated and
+                  breaks inside ResponsiveContainer in some Recharts builds).
+                  Bar onClick hands us the data entry directly — recharts
+                  spreads the period fields onto it, so entry.key is present.
+                  We also stamp openDrill onto the row so handler resolution
+                  is robust across recharts arg shapes. */}
+              <Bar  yAxisId="left" dataKey="ontime" name="On Time (incl. Early)" stackId="a" fill="#16a34a" cursor="pointer" onClick={openDrill} />
+              <Bar  yAxisId="left" dataKey="late"   name="Late"                  stackId="a" fill="#dc2626" radius={[3, 3, 0, 0]} cursor="pointer" onClick={openDrill} />
               <Line yAxisId="right" type="monotone" dataKey="avgDays" name="Avg Days vs Est (signed)"
-                stroke="var(--text-primary)" strokeWidth={2} dot={{ r: 3 }} />
+                stroke="var(--text-primary)" strokeWidth={2} dot={{ r: 4, cursor: 'pointer' }}
+                activeDot={{ r: 6, cursor: 'pointer', onClick: (_, p) => openDrill(p?.payload) }} />
             </ComposedChart>
           </ResponsiveContainer>
           <p className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>
