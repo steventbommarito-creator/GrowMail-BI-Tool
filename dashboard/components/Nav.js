@@ -31,6 +31,7 @@ export default function Nav() {
 
   const links = [
     { href: '/late-mailings', label: 'Late Mailings' },
+    { href: '/mailing-timeliness', label: 'Mailing Timeliness' },
     { href: '/overview', label: 'Overview' },
     { href: '/forecast', label: 'Forecast' },
     { href: '/cashflow', label: 'Cashflow' },
