@@ -105,10 +105,19 @@ function categorize(estDate, actDate) {
   return d > 0 ? 'late' : 'ontime';
 }
 
+// A drop is "LDP" if EITHER signal says so: mail_method = 'LDP' OR the
+// product_category is an LDP Postcard. The data isn't consistent — some LDP
+// Postcard drops have mail_method = 'Unspecified' (e.g. drop 266607), so
+// checking mail_method alone misses them. We treat the union as LDP.
+function isLdpDrop(drop) {
+  if ((drop.mail_method || '').toUpperCase().trim() === 'LDP') return true;
+  if ((drop.product_category || '').toLowerCase().includes('ldp postcard')) return true;
+  return false;
+}
+
 // LDP inclusion rule: include only when actual_postage > 0 (real posted cost).
 function passesLdpRule(drop) {
-  const isLdp = (drop.mail_method || '').toUpperCase() === 'LDP';
-  if (!isLdp) return true;
+  if (!isLdpDrop(drop)) return true;
   return Number(drop.actual_postage) > 0;
 }
 
@@ -169,15 +178,6 @@ const ACTIVE_ORDER_STATUSES = [
   'OUTSOURCED', 'OUTSOURCED [STAGING]',
 ];
 
-// Same LDP test the Late Mailings page uses (mirror of lib/postage's
-// isLdpMailMethod). The past-due snapshot drops EVERY LDP row so the
-// count matches the Late Mailings page exactly — even LDP drops with
-// posted postage are excluded from past-due because Late Mailings does
-// the same. (The completed-in-range query still uses the more permissive
-// rule: include LDP when actual_postage > 0.)
-function isLdpDrop(drop) {
-  return (drop.mail_method || '').toUpperCase().trim() === 'LDP';
-}
 
 // ─── component ──────────────────────────────────────────────────────────────
 
