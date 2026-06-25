@@ -116,6 +116,24 @@ function passesLdpRule(drop) {
 // shouldn't dilute timeliness numbers.
 const EXCLUDED_ORDER_STATUSES = new Set(['CANCELED', 'VOID']);
 
+// Active production statuses — same set the Late Mailings page uses to
+// define "in flight". The past-due snapshot KPI uses these so its count
+// ties out exactly to the Late Mailings table count.
+const ACTIVE_ORDER_STATUSES = [
+  'DAL [SUBMITTED]', 'DIGITAL READY', 'DIGITAL [STAGING]',
+  'OUTSOURCED', 'OUTSOURCED [STAGING]',
+];
+
+// Same LDP test the Late Mailings page uses (mirror of lib/postage's
+// isLdpMailMethod). The past-due snapshot drops EVERY LDP row so the
+// count matches the Late Mailings page exactly — even LDP drops with
+// posted postage are excluded from past-due because Late Mailings does
+// the same. (The completed-in-range query still uses the more permissive
+// rule: include LDP when actual_postage > 0.)
+function isLdpDrop(drop) {
+  return (drop.mail_method || '').toUpperCase().trim() === 'LDP';
+}
+
 // ─── component ──────────────────────────────────────────────────────────────
 
 export default function MailingTimelinessPage() {
@@ -168,8 +186,13 @@ export default function MailingTimelinessPage() {
       }
     }
 
-    // 2. Past-due snapshot — mirrors Late Mailings: live status AND est < today
-    //    AND act is null. The page's KPI uses this set directly.
+    // 2. Past-due snapshot — MIRROR the Late Mailings page exactly so the
+    //    KPI count ties out to that page row-for-row:
+    //       - is_live_status = true
+    //       - drop_est_date < today
+    //       - drop_act_date IS NULL
+    //       - order_status IN (ACTIVE_ORDER_STATUSES)  ← additional filter
+    //       - mail_method != 'LDP' (filtered client-side)
     const today = todayET();
     const pastDueRows = [];
     {
@@ -179,6 +202,7 @@ export default function MailingTimelinessPage() {
           .from('osprey_mail_drops')
           .select(fields)
           .eq('is_live_status', true)
+          .in('order_status', ACTIVE_ORDER_STATUSES)
           .lt('drop_est_date', today)
           .is('drop_act_date', null)
           .range(from, from + size - 1);
@@ -191,7 +215,9 @@ export default function MailingTimelinessPage() {
     }
 
     setDrops(completedRows.filter(d => !EXCLUDED_ORDER_STATUSES.has(d.order_status) && passesLdpRule(d)));
-    setPastDue(pastDueRows.filter(d => !EXCLUDED_ORDER_STATUSES.has(d.order_status) && passesLdpRule(d)));
+    // Past-due drops drop ALL LDP rows (not the postage-gated rule), matching
+    // the Late Mailings page so the snapshot count is identical.
+    setPastDue(pastDueRows.filter(d => !isLdpDrop(d)));
     setLoading(false);
   }, [range.start, range.end]);
 
