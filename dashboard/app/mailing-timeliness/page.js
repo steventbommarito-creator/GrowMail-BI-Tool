@@ -93,16 +93,16 @@ function todayET() {
   return new Date().toISOString().split('T')[0];
 }
 
-// Categorize a drop's act-vs-est lateness. Strict per user choice:
-//   Early   = act < est
-//   On Time = act == est
-//   Late    = act > est
+// Categorize a drop's act-vs-est lateness. Per the user's revised rule:
+//   On Time = act <= est  (early counts as on time)
+//   Late    = act >  est
+// "Avg Days vs Est" (signed average of act - est) is still surfaced so the
+// negative-vs-positive direction is visible at a glance even though the
+// categorical buckets don't separate early.
 function categorize(estDate, actDate) {
   if (!estDate || !actDate) return null;
   const d = daysBetween(estDate, actDate);
-  if (d < 0) return 'early';
-  if (d > 0) return 'late';
-  return 'ontime';
+  return d > 0 ? 'late' : 'ontime';
 }
 
 // LDP inclusion rule: include only when actual_postage > 0 (real posted cost).
@@ -249,7 +249,7 @@ export default function MailingTimelinessPage() {
     const map = new Map();
     for (const d of drops) {
       const key = bucketByGrain(d.drop_act_date);
-      if (!map.has(key)) map.set(key, { key, label: periodLabel(key, grain), drops: [], early: 0, ontime: 0, late: 0, sumDays: 0 });
+      if (!map.has(key)) map.set(key, { key, label: periodLabel(key, grain), drops: [], ontime: 0, late: 0, sumDays: 0 });
       const slot = map.get(key);
       const cat = categorize(d.drop_est_date, d.drop_act_date);
       slot.drops.push(d);
@@ -261,7 +261,6 @@ export default function MailingTimelinessPage() {
       ...p,
       count: p.drops.length,
       avgDays: p.drops.length > 0 ? p.sumDays / p.drops.length : 0,
-      earlyPct:  p.drops.length > 0 ? p.early  / p.drops.length : 0,
       ontimePct: p.drops.length > 0 ? p.ontime / p.drops.length : 0,
       latePct:   p.drops.length > 0 ? p.late   / p.drops.length : 0,
     }));
@@ -296,10 +295,8 @@ export default function MailingTimelinessPage() {
       'Period Key': p.key,
       'Drops Mailed': p.count,
       'Avg Days vs Est': p.avgDays.toFixed(2),
-      'Early':      p.early,
       'On Time':    p.ontime,
       'Late':       p.late,
-      '% Early':    (p.earlyPct  * 100).toFixed(1),
       '% On Time':  (p.ontimePct * 100).toFixed(1),
       '% Late':     (p.latePct   * 100).toFixed(1),
     }));
@@ -314,8 +311,9 @@ export default function MailingTimelinessPage() {
       <div>
         <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>Mailing Timeliness</h1>
         <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-          How reliably we mail on or before the scheduled date. Bucketed by actual mail date. Excludes CANCELED / VOID,
-          rows without a scheduled date, and LDP drops with no posted postage.
+          How reliably we mail on or before the scheduled date. Bucketed by actual mail date.
+          On Time = drop mailed on or before the scheduled date (early counts as on time).
+          Excludes CANCELED / VOID, rows without a scheduled date, and LDP drops with no posted postage.
         </p>
       </div>
 
@@ -347,7 +345,7 @@ export default function MailingTimelinessPage() {
             {fmtPct(kpis.trailingOnTime)}
           </p>
           <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-            On Time = act == est (strict, per page rules)
+            On Time = act ≤ est (early counts as on time)
           </p>
         </KpiCard>
 
@@ -395,9 +393,14 @@ export default function MailingTimelinessPage() {
 
       {/* Historical chart */}
       <div className="rounded-xl p-4 border" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
-        <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>
+        <h2 className="text-sm font-semibold mb-1" style={{ color: 'var(--text-secondary)' }}>
           Mailing Timeliness over Time
         </h2>
+        <p className="text-[11px] mb-3" style={{ color: 'var(--text-muted)' }}>
+          Bars: On Time (mailed on or before scheduled) vs Late drops per period.
+          Black line = <strong>Avg Days vs Est</strong>, the signed average of
+          <em> (actual − scheduled)</em> in days — positive means the period ran late on average, negative means it ran early.
+        </p>
         {loading ? (
           <div style={{ height: 320, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Loading…</div>
         ) : periods.length === 0 ? (
@@ -415,10 +418,9 @@ export default function MailingTimelinessPage() {
                 formatter={(v, n) => n === 'Avg Days vs Est' ? [fmtDays(v), n] : [fmtN(v), n]}
                 contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar  yAxisId="left" dataKey="early"  name="Early"   stackId="a" fill="#2563eb" />
-              <Bar  yAxisId="left" dataKey="ontime" name="On Time" stackId="a" fill="#16a34a" />
-              <Bar  yAxisId="left" dataKey="late"   name="Late"    stackId="a" fill="#dc2626" radius={[3, 3, 0, 0]} />
-              <Line yAxisId="right" type="monotone" dataKey="avgDays" name="Avg Days vs Est"
+              <Bar  yAxisId="left" dataKey="ontime" name="On Time (incl. Early)" stackId="a" fill="#16a34a" />
+              <Bar  yAxisId="left" dataKey="late"   name="Late"                  stackId="a" fill="#dc2626" radius={[3, 3, 0, 0]} />
+              <Line yAxisId="right" type="monotone" dataKey="avgDays" name="Avg Days vs Est (signed)"
                 stroke="var(--text-primary)" strokeWidth={2} dot={{ r: 3 }} />
             </ComposedChart>
           </ResponsiveContainer>
@@ -450,17 +452,19 @@ export default function MailingTimelinessPage() {
                 {[
                   { key: 'period',   label: 'Period',          align: 'left' },
                   { key: 'count',    label: 'Drops Mailed',    align: 'right' },
-                  { key: 'avgDays',  label: 'Avg Days vs Est', align: 'right' },
-                  { key: 'earlyPct', label: '% Early',         align: 'right' },
-                  { key: 'ontimePct',label: '% On Time',       align: 'right' },
+                  { key: 'avgDays',  label: 'Avg Days vs Est', align: 'right',
+                    tooltip: 'Signed average of (actual − scheduled) in days across drops in this period. Positive = running late, negative = running early, zero = exactly on day.' },
+                  { key: 'ontimePct',label: '% On Time',       align: 'right',
+                    tooltip: 'Includes drops mailed on or before scheduled date.' },
                   { key: 'latePct',  label: '% Late',          align: 'right' },
                 ].map(col => {
                   const active = sortKey === col.key;
                   return (
                     <th key={col.key} onClick={() => toggleSort(col.key)}
+                      title={col.tooltip}
                       className={`px-3 py-2 font-medium cursor-pointer select-none ${col.align === 'right' ? 'text-right' : 'text-left'}`}
                       style={{ color: active ? 'var(--accent)' : 'var(--text-secondary)' }}>
-                      {col.label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+                      {col.label}{col.tooltip ? ' ⓘ' : ''}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
                     </th>
                   );
                 })}
@@ -468,7 +472,7 @@ export default function MailingTimelinessPage() {
             </thead>
             <tbody>
               {sortedPeriods.length === 0 && (
-                <tr><td colSpan={6} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
+                <tr><td colSpan={5} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
                   {loading ? 'Loading…' : 'No drops in this range.'}
                 </td></tr>
               )}
@@ -557,7 +561,7 @@ function BreakdownCard({ title, rows, loading }) {
             </div>
           ))}
           <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
-            Bar = % on time. Right number = drop count. Strict on-time rule (act == est).
+            Bar = % on time (act ≤ est, early counts as on time). Right number = drop count.
           </p>
         </div>
       )}
@@ -582,9 +586,6 @@ function PeriodRow({ period, isExp, onToggle }) {
           color: period.avgDays > 0 ? 'var(--status-critical)' : period.avgDays < 0 ? 'var(--status-ok)' : 'var(--text-primary)' }}>
           {fmtDays(period.avgDays)}
         </td>
-        <td className="px-3 py-2 text-right" style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
-          {(period.earlyPct  * 100).toFixed(0)}%
-        </td>
         <td className="px-3 py-2 text-right" style={{ color: 'var(--status-ok)', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
           {(period.ontimePct * 100).toFixed(0)}%
         </td>
@@ -594,7 +595,7 @@ function PeriodRow({ period, isExp, onToggle }) {
       </tr>
       {isExp && (
         <tr>
-          <td colSpan={6} style={{ background: 'var(--surface2)', padding: 0 }}>
+          <td colSpan={5} style={{ background: 'var(--surface2)', padding: 0 }}>
             <div style={{ padding: '8px 12px' }}>
               <table className="w-full text-[11px]">
                 <thead>
