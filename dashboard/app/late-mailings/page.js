@@ -105,6 +105,7 @@ export default function LateMailingsPage() {
   const EMPTY_FILTERS = {
     daysLate:    { min: '', max: '' },
     est:         { start: '', end: '' },
+    planned:     'all',          // 'all' | 'has' | 'none' — filter by Planned date presence
     customer:    '',
     product:     [],
     orderId:     [],
@@ -267,6 +268,12 @@ export default function LateMailingsPage() {
     if (filters.daysLate.max !== '' && d.daysLate > Number(filters.daysLate.max)) return false;
     if (filters.est.start && (!d.drop_est_date || d.drop_est_date < filters.est.start)) return false;
     if (filters.est.end   && (!d.drop_est_date || d.drop_est_date > filters.est.end))   return false;
+    // Planned-date presence — sourced from the plannedDrops map, not a row field.
+    if (filters.planned !== 'all') {
+      const hasPlan = plannedDrops.has(d.mail_drop_id);
+      if (filters.planned === 'has'  && !hasPlan) return false;
+      if (filters.planned === 'none' &&  hasPlan) return false;
+    }
     if (filters.customer) {
       const q = filters.customer.toLowerCase();
       if (!(d.customer_name || '').toLowerCase().includes(q)) return false;
@@ -289,7 +296,7 @@ export default function LateMailingsPage() {
     if (filters.remaining.min !== '' && rem < Number(filters.remaining.min)) return false;
     if (filters.remaining.max !== '' && rem > Number(filters.remaining.max)) return false;
     return true;
-  }, [filters]);
+  }, [filters, plannedDrops]);
 
   const filteredLateDrops   = useMemo(() => lateDrops.filter(passesFilters), [lateDrops, passesFilters]);
   const filteredFutureDrops = useMemo(() => enrichedFutureDrops.filter(passesFilters), [enrichedFutureDrops, passesFilters]);
@@ -299,6 +306,7 @@ export default function LateMailingsPage() {
     return !!(
       f.daysLate.min || f.daysLate.max ||
       f.est.start || f.est.end ||
+      (f.planned && f.planned !== 'all') ||
       f.customer ||
       f.product.length || f.orderId.length || f.dropId.length ||
       f.billVia.length || f.mailLocation.length ||
@@ -879,9 +887,20 @@ export default function LateMailingsPage() {
                   if (col.key === 'drop_est_date') {
                     return [th, (
                       <th key="planned" className="px-3 py-2 font-medium text-left select-none"
-                        style={{ color: 'var(--text-secondary)' }}
+                        style={{ color: filters.planned !== 'all' ? 'var(--accent)' : 'var(--text-secondary)' }}
                         title="Date this drop is planned for (set via Save Plan in Planning Mode)">
                         Planned
+                        <FilterPopover active={filters.planned !== 'all'} width={180}>
+                          <ChoiceFilter
+                            value={filters.planned}
+                            onChange={(v) => setFilter('planned', v)}
+                            options={[
+                              { value: 'all',  label: 'All' },
+                              { value: 'has',  label: 'Has planned date' },
+                              { value: 'none', label: 'No planned date' },
+                            ]}
+                          />
+                        </FilterPopover>
                       </th>
                     )];
                   }
@@ -1529,6 +1548,32 @@ function TextFilter({ value, onChange, placeholder = 'Contains…' }) {
     <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
       autoFocus
       style={{ ...filterInputStyle, width: '100%' }} />
+  );
+}
+
+// Single-choice radio-style filter. Used for the Planned column (All / Has /
+// None). Selected row is tinted; click sets the value.
+function ChoiceFilter({ value, onChange, options }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {options.map(opt => {
+        const sel = value === opt.value;
+        return (
+          <button key={opt.value} type="button" onClick={() => onChange(opt.value)}
+            style={{
+              textAlign: 'left', padding: '5px 8px', borderRadius: 4, fontSize: 12, cursor: 'pointer',
+              background: sel ? 'var(--accent-light)' : 'transparent',
+              color: sel ? 'var(--accent)' : 'var(--text-primary)',
+              fontWeight: sel ? 600 : 400,
+              border: '1px solid', borderColor: sel ? 'var(--accent)' : 'transparent',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+            <span style={{ width: 12, display: 'inline-block' }}>{sel ? '✓' : ''}</span>
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
