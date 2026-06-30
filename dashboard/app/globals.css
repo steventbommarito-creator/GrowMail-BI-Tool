@@ -86,3 +86,12 @@ body {
 [data-theme="mono"] .status-stale::before { content: "STALE"; }
 [data-theme="mono"] .status-missing::before { content: "MISSING"; }
 [data-theme="mono"] .status-failed::before { content: "FAILED"; }
+
+/* ── Secret custom cursor (toggled via Cmd+Ctrl+R / Ctrl+Alt+R) ──────────────
+   The SecretCursor component adds/removes `.custom-cursor` on <html>. We force
+   it onto every element (incl. buttons/inputs/links that set their own cursor)
+   with a universal selector + !important. Hotspot 0 0 = top-left of the image. */
+html.custom-cursor,
+html.custom-cursor * {
+  cursor: url('/custom-cursor.png') 0 0, auto !important;
+}

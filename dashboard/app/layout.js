@@ -2,6 +2,7 @@ import { Geist } from "next/font/google";
 import "./globals.css";
 import Nav from "../components/Nav";
 import ChatWidget from "../components/ChatWidget";
+import SecretCursor from "../components/SecretCursor";
 import { ThemeProvider } from "../context/ThemeContext";
 
 const geistSans = Geist({
@@ -23,6 +24,8 @@ export default function RootLayout({ children }) {
           <main className="flex-1 p-4 md:p-6">{children}</main>
           {/* Floating AI chat widget — self-gates rendering by user email. */}
           <ChatWidget />
+          {/* Secret cursor easter egg — Cmd+Ctrl+R (mac) / Ctrl+Alt+R (win). */}
+          <SecretCursor />
         </ThemeProvider>
       </body>
     </html>
