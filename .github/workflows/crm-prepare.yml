@@ -1,0 +1,31 @@
+name: CRM Prepare
+
+# One-time: builds the Freshsales owner map + contact-email cache and fills each
+# staged row's deal payload (normalized_json), then flips the import to
+# 'pushing'. The ~289k-contact scan is ~1.5h at the 2000/hr cap, so we allow a
+# long single run (GitHub-hosted jobs can run up to 6h). Trigger manually from
+# the Actions tab after the rows are staged.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: crm-prepare
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node crm-import/prepare.js
+        env:
+          FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+          FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

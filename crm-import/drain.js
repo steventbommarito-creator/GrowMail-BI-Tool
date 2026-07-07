@@ -17,7 +17,7 @@ async function pickImportId() {
     .from('crm_imports')
     .select('id, status, mapping_json')
     .eq('import_type', 'opportunities')
-    .neq('status', 'complete')
+    .eq('status', 'pushing')   // only drain once prepare has filled normalized_json
     .order('uploaded_at', { ascending: false })
     .limit(20);
   const hit = (data || []).find((i) => i.mapping_json?.__marker === 'sfdc-opps-2022-script');
@@ -52,6 +52,7 @@ async function main() {
       .select('id, row_index, raw_json, normalized_json')
       .eq('import_id', importId)
       .eq('status', 'pending')
+      .not('normalized_json', 'is', null)   // only rows prepare has built
       .order('row_index', { ascending: true })
       .limit(PAGE);
     if (error) throw new Error(`fetch pending failed: ${error.message}`);
