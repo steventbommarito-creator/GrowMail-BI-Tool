@@ -1,0 +1,35 @@
+name: CRM Deal Drain
+
+# Pushes staged SFDC opportunities (crm_import_rows) into Freshsales, one deal
+# at a time, paced under the 2000/hr API cap. Resumable: each run drains
+# 'pending' rows for ~50 min then exits; the next scheduled run continues.
+# Runs entirely in the cloud — your computer can be off.
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # top of every hour
+  workflow_dispatch:        # manual "Run workflow" button
+
+# Never let two drains overlap (they'd double-send the same pending rows).
+concurrency:
+  group: crm-deal-drain
+  cancel-in-progress: false
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node crm-import/drain.js
+        env:
+          CI: 'true'
+          MAX_RUNTIME_MS: '3000000'          # 50 minutes
+          FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+          FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
