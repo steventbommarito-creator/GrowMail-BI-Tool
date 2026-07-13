@@ -6,9 +6,8 @@ name: CRM Deal Drain
 # Runs entirely in the cloud — your computer can be off.
 
 on:
-  schedule:
-    - cron: '0 * * * *'   # top of every hour
-  workflow_dispatch:        # manual "Run workflow" button
+  # Deal import is complete — hourly cron retired. Re-run manually if ever needed.
+  workflow_dispatch:
 
 # Never let two drains overlap (they'd double-send the same pending rows).
 concurrency:

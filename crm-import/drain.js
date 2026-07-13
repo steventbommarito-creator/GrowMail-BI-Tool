@@ -28,7 +28,7 @@ async function main() {
   const limitArg = process.argv.indexOf('--limit');
   const limit = limitArg > -1 ? Number(process.argv[limitArg + 1]) : 0;
   const importId = await pickImportId();
-  if (!importId) { console.error('No open opportunities import found. Run load.js first.'); process.exit(1); }
+  if (!importId) { console.log('No opportunities import in status=pushing — nothing to drain.'); return; }
   console.log(`Draining import ${importId}${limit ? ` (limit ${limit})` : ''}…`);
 
   const { data: batch } = await C.supabase

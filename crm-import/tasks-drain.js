@@ -21,7 +21,7 @@ async function main() {
   const limitArg = process.argv.indexOf('--limit');
   const limit = limitArg > -1 ? Number(process.argv[limitArg + 1]) : 0;
   const importId = await pickImportId();
-  if (!importId) { console.error('No open tasks import (status=pushing) found.'); process.exit(1); }
+  if (!importId) { console.log('No tasks import in status=pushing — nothing to drain.'); return; }
   console.log(`Draining tasks import ${importId}${limit ? ` (limit ${limit})` : ''}…`);
 
   const { data: batch } = await C.supabase
