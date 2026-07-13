@@ -1,0 +1,29 @@
+name: CRM Tasks Prepare
+
+# One-time: builds contact + account + owner caches from Freshsales and fills each
+# staged activity's task payload, then flips the tasks import to 'pushing'. Two
+# ~1.5h cache scans fit in one long job. Trigger manually after tasks-load stages.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: crm-tasks-prepare
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node crm-import/tasks-prepare.js
+        env:
+          FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+          FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

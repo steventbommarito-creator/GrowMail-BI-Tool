@@ -1,0 +1,33 @@
+name: CRM Tasks Drain
+
+# Pushes prepared activity rows into Freshsales as tasks (POST /tasks), one at a
+# time, paced under the 2000/hr cap. Resumable: each run drains ~50 min then
+# exits; the next hourly run continues. Runs in the cloud — computer can be off.
+
+on:
+  schedule:
+    - cron: '30 * * * *'   # half past every hour (offset from the deal drain)
+  workflow_dispatch:
+
+concurrency:
+  group: crm-tasks-drain
+  cancel-in-progress: false
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node crm-import/tasks-drain.js
+        env:
+          CI: 'true'
+          MAX_RUNTIME_MS: '3000000'
+          FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+          FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
