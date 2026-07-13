@@ -1,0 +1,40 @@
+name: CRM Lost Cleanup
+
+# One-time hygiene: set every OPEN (Quoted) deal whose expected close is before
+# CUTOFF to Lost. Won / already-Lost deals are never touched. Resumable and
+# idempotent (flipped deals leave the filter). Trigger manually from Actions.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cutoff:
+        description: 'Flip open deals with expected_close before this date (YYYY-MM-DD)'
+        required: false
+        default: '2026-06-13'
+      dry_run:
+        description: 'Count only, change nothing (true/false)'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: crm-lost-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node crm-import/lost-cleanup.js
+        env:
+          CUTOFF: ${{ inputs.cutoff }}
+          DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '' }}
+          FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+          FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
