@@ -34,6 +34,7 @@ jobs:
         env:
           CUTOFF: ${{ inputs.cutoff }}
           DRY_RUN: ${{ inputs.dry_run == 'true' && '1' || '' }}
+          MAX_RUNTIME_MS: '18000000'   # 300 min — run to completion in one job (job timeout is 350)
           FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
           FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
