@@ -1,0 +1,38 @@
+name: Osprey Lead Sync
+
+# Scrapes new Osprey users and creates them as Freshworks leads (contacts with
+# lifecycle "Lead"), skipping any email that already exists. Runs ~40 min after
+# each scrape. First run seeds the last 30 days; later runs only pick up new
+# signups (watermark in osprey_lead_sync). Resumable.
+
+on:
+  schedule:
+    - cron: '40 5,15,17,19,21 * * *'   # ~40 min after each BI Scraper run
+  workflow_dispatch:
+
+concurrency:
+  group: osprey-lead-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: npx playwright install chromium --with-deps
+      - run: node crm-import/osprey-lead-sync.js
+        env:
+          CI: 'true'
+          MAX_RUNTIME_MS: '18000000'         # 300 min
+          OSPREY_URL: ${{ secrets.OSPREY_URL }}
+          OSPREY_USER: ${{ secrets.OSPREY_USER }}
+          OSPREY_PASS: ${{ secrets.OSPREY_PASS }}
+          FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+          FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
