@@ -38,6 +38,7 @@ export default function Nav() {
     { href: '/actuals', label: 'Actuals' },
     { href: '/hygiene', label: 'Data Hygiene' },
     { href: '/crm', label: 'CRM Integration' },
+    { href: '/crm/sync', label: 'Sync Status' },
   ];
 
   // Load last sync times on mount
