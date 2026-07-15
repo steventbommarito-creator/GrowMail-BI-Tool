@@ -86,18 +86,24 @@ async function buildAccountCache(log = () => {}) {
   const views = f.data.filters || [];
   const view = views.find((v) => String(v.name || '').toLowerCase() === 'all accounts') || views[0];
   const cache = {};
-  let page = 1;
+  let page = 1, total = null, consecFail = 0, skipped = 0;
   for (;;) {
+    if (page > 6000) break;                                  // safety cap
     const r = await C.fs('GET', `/sales_accounts/view/${view.id}?page=${page}&per_page=100`);
-    if (!r.ok) throw new Error(`accounts page ${page} failed: ${r.error}`);
+    if (!r.ok) {                                             // tolerate a transient page failure mid-scan
+      if (++consecFail > 25) throw new Error(`accounts scan stalled near page ${page}: ${r.error}`);
+      log(`  ! accounts page ${page} failed (${r.error}) — skipping`);
+      skipped++; page++; continue;
+    }
+    consecFail = 0;
     const rows = r.data.sales_accounts || [];
     if (!rows.length) break;
     for (const a of rows) {
       const nm = String(a.name || '').trim().toLowerCase();
       if (nm && !(nm in cache)) cache[nm] = a.id;
     }
-    const total = r.data.meta?.total_pages;
-    if (page % 50 === 0) log(`  accounts page ${page}${total ? '/' + total : ''} — ${Object.keys(cache).length} names`);
+    total = r.data.meta?.total_pages || total;
+    if (page % 50 === 0 || (total && page >= total)) log(`  accounts page ${page}${total ? '/' + total : ''} — ${Object.keys(cache).length} names${skipped ? ` (${skipped} skipped)` : ''}`);
     if (total && page >= total) break;
     page++;
   }

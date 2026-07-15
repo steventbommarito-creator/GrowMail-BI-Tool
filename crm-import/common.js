@@ -120,10 +120,16 @@ async function buildContactCache(log = () => {}) {
   const view = views.find((v) => String(v.name || '').toLowerCase() === 'all contacts') || views[0];
   if (!view) throw new Error('no contacts view');
   const cache = {};
-  let page = 1;
+  let page = 1, total = null, consecFail = 0, skipped = 0;
   for (;;) {
+    if (page > 6000) break;                                  // safety cap
     const r = await fs('GET', `/contacts/view/${view.id}?page=${page}&per_page=100`);
-    if (!r.ok) throw new Error(`contacts page ${page} failed: ${r.error}`);
+    if (!r.ok) {                                             // one transient page must not kill a ~1.5h scan
+      if (++consecFail > 25) throw new Error(`contacts scan stalled near page ${page}: ${r.error}`);
+      log(`  ! contacts page ${page} failed (${r.error}) — skipping`);
+      skipped++; page++; continue;
+    }
+    consecFail = 0;
     const rows = r.data.contacts || [];
     if (!rows.length) break;
     for (const ct of rows) {
@@ -131,8 +137,8 @@ async function buildContactCache(log = () => {}) {
       for (const e of ct.emails || []) keys.push(String((e && e.value) || e || '').toLowerCase());
       for (const k of keys) if (k && !(k in cache)) cache[k] = ct.id;
     }
-    const total = r.data.meta?.total_pages;
-    log(`  contacts page ${page}${total ? '/' + total : ''} — ${Object.keys(cache).length} emails`);
+    total = r.data.meta?.total_pages || total;
+    if (page % 50 === 0 || (total && page >= total)) log(`  contacts page ${page}${total ? '/' + total : ''} — ${Object.keys(cache).length} emails${skipped ? ` (${skipped} skipped)` : ''}`);
     if (total && page >= total) break;
     page++;
   }
