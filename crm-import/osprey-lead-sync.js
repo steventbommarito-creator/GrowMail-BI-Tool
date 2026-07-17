@@ -18,6 +18,38 @@ const C = require('./common');
 
 const LEAD_LIFECYCLE_ID = 128081818855;   // "Lead"
 const NEW_STATUS_ID = 127004203345;        // "New"
+const SOURCE_NAME = 'Account No Order';   // lead_source_id (id 127007286667), resolved by name at runtime
+const SOURCE_WINDOW_DAYS = 7;             // only tag leads whose AMP account is <7 days old
+const sourceCutoffISO = () => new Date(Date.now() - SOURCE_WINDOW_DAYS * 86400 * 1000).toISOString();
+
+async function resolveSourceId() {
+  const r = await C.fs('GET', '/selector/lead_sources');
+  const hit = (r.data?.lead_sources || []).find((s) => String(s.name || '').trim().toLowerCase() === SOURCE_NAME.toLowerCase());
+  return hit?.id || null;
+}
+
+// --backfill: stamp the source on every lead we already created via this process.
+async function backfill() {
+  const sourceId = await resolveSourceId();
+  if (!sourceId) { console.error(`Lead source "${SOURCE_NAME}" not found in Freshworks — create it in admin first.`); process.exit(1); }
+  const cutoff = sourceCutoffISO();
+  console.log(`Backfilling source "${SOURCE_NAME}" (id ${sourceId}) onto leads with AMP account created since ${cutoff}…`);
+  let done = 0, failed = 0, from = 0;
+  for (;;) {
+    const { data } = await C.supabase.from('osprey_lead_sync')
+      .select('fw_contact_id').eq('outcome', 'created').not('fw_contact_id', 'is', null)
+      .gte('osprey_created_at', cutoff)
+      .order('user_id', { ascending: true }).range(from, from + 499);
+    if (!data || !data.length) break;
+    for (const row of data) {
+      const res = await C.fs('PUT', `/contacts/${row.fw_contact_id}`, { contact: { lead_source_id: sourceId } });
+      if (res.ok) done++; else { failed++; console.error(`  contact ${row.fw_contact_id} failed: ${res.status} ${res.error}`); }
+      if ((done + failed) % 100 === 0) console.log(`  ${done} updated, ${failed} failed`);
+    }
+    if (data.length < 500) break; from += 500;
+  }
+  console.log(`Backfill done: ${done} updated, ${failed} failed.`);
+}
 const SEED_DAYS = Number(process.env.LEAD_SEED_DAYS || 30);
 const USERS_API = 'https://api.onebrand.io/api/v1/users';
 
@@ -72,9 +104,13 @@ async function record(u, outcome, fwId) {
 }
 
 async function main() {
+  if (process.argv.includes('--backfill')) return backfill();
   const limitArg = process.argv.indexOf('--limit');
   const limit = limitArg > -1 ? Number(process.argv[limitArg + 1]) : 0;
   const dryRun = process.argv.includes('--dry-run');
+
+  const sourceId = await resolveSourceId();
+  console.log(`lead source "${SOURCE_NAME}": ${sourceId ? `id ${sourceId}` : 'NOT FOUND (create it in FW admin; leads import without a source until then)'}`);
 
   const { data: wm } = await C.supabase.from('osprey_lead_sync').select('user_id').order('user_id', { ascending: false }).limit(1);
   const watermark = wm && wm.length ? Number(wm[0].user_id) : null;
@@ -98,6 +134,7 @@ async function main() {
       emails: [{ value: email, is_primary: true }],
       lifecycle_stage_id: LEAD_LIFECYCLE_ID, contact_status_id: NEW_STATUS_ID,
     };
+    if (sourceId && u.created_at && u.created_at >= sourceCutoffISO()) contact.lead_source_id = sourceId; // only tag <7-day-old AMP accounts
     if (u.user_phone) contact.mobile_number = String(u.user_phone);
     if (u.company) contact.job_title = String(u.company).slice(0, 100); // no plain company field; keep it visible
     if (dryRun) { stats.created++; if (stats.created <= 3) console.log('CREATE', JSON.stringify(contact)); continue; }
