@@ -1,13 +1,17 @@
 name: Osprey Deal Sync
 
-# Syncs the Gordon & Lance (Osprey) orders into Freshworks deals: new order_id ->
-# new deal, changed status/amount -> update, INCOMPLETE -> skipped. Runs ~30 min
-# after each scrape so it reads fresh osprey_mail_drops. Resumable via the
-# osprey_deal_sync state table, so the long first seeding can span runs.
+# Scrapes the Gordon & Lance (Osprey) finance report fresh, then syncs those
+# orders into Freshworks deals: new order_id -> new deal, changed status/amount
+# -> update, INCOMPLETE -> skipped. Self-contained (scrape then sync) so each
+# run reads fresh data without depending on the BI Scraper's timing. USPS is not
+# touched here — it stays on the BI Scraper's own schedule.
+#
+# Schedule (GitHub cron is UTC, no daylight-saving): hourly 7a–6p EST plus 9p &
+# 11p EST, using EST = UTC-5. In summer (EDT) these fire 1 hour later by the clock.
 
 on:
   schedule:
-    - cron: '30 5,15,17,19,21 * * *'   # ~30 min after each BI Scraper run
+    - cron: '0 2,4,12-23 * * *'   # 7a–6p EST (UTC 12–23) + 9p EST (UTC 2) + 11p EST (UTC 4)
   workflow_dispatch:
 
 concurrency:
@@ -24,7 +28,21 @@ jobs:
         with:
           node-version: '20'
       - run: npm install
-      - run: node crm-import/osprey-deal-sync.js
+      - run: npx playwright install chromium --with-deps
+        timeout-minutes: 10
+      - name: Scrape Osprey finance report -> osprey_mail_drops
+        run: node run.js
+        env:
+          SCRAPE_SOURCE: osprey
+          OSPREY_URL: ${{ secrets.OSPREY_URL }}
+          OSPREY_USER: ${{ secrets.OSPREY_USER }}
+          OSPREY_PASS: ${{ secrets.OSPREY_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TRIGGERED_BY: osprey-deal-sync
+      - name: Sync orders -> Freshworks deals
+        run: node crm-import/osprey-deal-sync.js
         env:
           CI: 'true'
           FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
