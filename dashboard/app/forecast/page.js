@@ -99,6 +99,16 @@ const LIVE_BUCKETS = {
 const ARRIVALS_BY_WEEKS_OUT = { 0: 8, 1: 60, 2: 86, 3: 92, 4: 105, 5: 107 };
 const arrivalsFor = (wo) => (wo < 0 ? 0 : ARRIVALS_BY_WEEKS_OUT[Math.min(wo, 5)] ?? 0);
 
+// Legend-pill definitions for the Live vs Not-Live view. All figures are
+// POSTAGE dollars (actual once priced, else Est. Postage) — not drop revenue.
+const LIVE_BUCKET_DEFS = {
+  'Live': 'Drop is in production now (Outsourced / Production / Pending Ship) — its postage hits or is about to hit EPS.',
+  'Flip Window': 'Not live yet, scheduled 6–8 days out. Normal flip zone: historically 56–90% of drops have gone live by this point.',
+  'Behind Pace': 'Still not live with ≤5 days to the scheduled date (or past it). Historically ~90% of drops are live by 5 days out — these are late-risk, act now.',
+  'On Pace': 'Not live, scheduled more than 8 days out — too early to expect a flip (only ~30% of drops are live 10 days out).',
+  'Projected Arrivals': 'Orders NOT in the system yet: historical average arrivals for that horizon (≈60 drops 1wk out, up to ≈107 at 5+ wks) × avg postage of known future drops. Directional (±25%). Chart-only — excluded from totals and the EPS runway.',
+};
+
 function liveBucket(d, today) {
   if (d.is_live_status) return 'Live';
   if (!d.drop_est_date) return 'On Pace';
@@ -130,7 +140,7 @@ function dropBucket(status) {
 }
 
 // ─── Info tooltip component ───────────────────────────────────────────────────
-function InfoTip({ statuses, color }) {
+function InfoTip({ statuses, color, text }) {
   const [open, setOpen] = useState(false);
   return (
     <span className="relative inline-flex items-center" style={{ verticalAlign: 'middle' }}>
@@ -160,15 +170,21 @@ function InfoTip({ statuses, color }) {
             minWidth: 160, maxWidth: 240,
             pointerEvents: 'none',
           }}>
-          <div className="font-semibold mb-1" style={{ color }}>Includes:</div>
-          <ul className="space-y-0.5">
-            {statuses.map(s => (
-              <li key={s} className="flex items-center gap-1">
-                <span style={{ color: color, fontSize: 8 }}>●</span>
-                <span style={{ color: 'var(--text-primary)' }}>{s}</span>
-              </li>
-            ))}
-          </ul>
+          {text ? (
+            <div style={{ color: 'var(--text-primary)', lineHeight: 1.5 }}>{text}</div>
+          ) : (
+            <>
+              <div className="font-semibold mb-1" style={{ color }}>Includes:</div>
+              <ul className="space-y-0.5">
+                {statuses.map(s => (
+                  <li key={s} className="flex items-center gap-1">
+                    <span style={{ color: color, fontSize: 8 }}>●</span>
+                    <span style={{ color: 'var(--text-primary)' }}>{s}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
       )}
     </span>
@@ -551,6 +567,10 @@ export default function ForecastPage() {
             <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
               Postage by Week
             </h2>
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}
+              title="Actual postage once production has priced the drop, otherwise Est. Postage. Excludes LDP-method drops and drops already charged in EPS. Not drop revenue.">
+              postage $ only
+            </span>
             {selectedProduct && (
               <span className="flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full font-medium"
                 style={{ background: (productColorMap[selectedProduct] || 'var(--accent)') + '22', color: productColorMap[selectedProduct] || 'var(--accent)', border: `1px solid ${productColorMap[selectedProduct] || 'var(--accent)'}55` }}>
@@ -603,6 +623,7 @@ export default function ForecastPage() {
                 <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} />
                 {bucket}: {fmt$(val)}
                 {statusMap && <InfoTip statuses={statusMap[bucket] || []} color={color} />}
+                {chartMode === 'live' && LIVE_BUCKET_DEFS[bucket] && <InfoTip text={LIVE_BUCKET_DEFS[bucket]} color={color} />}
               </div>
             ) : null;
           })}
