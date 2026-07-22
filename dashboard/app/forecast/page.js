@@ -66,6 +66,15 @@ const DROP_BUCKETS = {
   'On Hold':       '#ef4444',
 };
 
+// ─── Live vs not-live (is_live_status) ────────────────────────────────────────
+// "Live" = drop is in production and its postage actually hits EPS (outsourced /
+// production / pending ship); "Not Live" = still upstream (scheduled, list
+// received, EDDM routes, etc.). Same definition used on the cashflow page.
+const LIVE_BUCKETS = {
+  'Live':     '#10b981',
+  'Not Live': '#9ca3af',
+};
+
 const DROP_BUCKET_STATUSES = {
   'Pre-Mail':      ['NEW', 'LIST RECEIVED', 'SCHEDULED', 'MAILING_LIST_IMPORTED', 'INITIAL', 'QUOTED'],
   'In Production': ['PRODUCTION', 'INKJETTING', 'DAL', 'DAL SUBMITTED', 'OUTSOURCED'],
@@ -187,7 +196,7 @@ export default function ForecastPage() {
 
     const [{ data: dropData }, { data: txns }, { data: projData }, { data: debitData }] = await Promise.all([
       supabase.from('osprey_mail_drops')
-        .select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, postage_amount, actual_postage, mail_method, mail_drop_quantity, mail_drop_amount, order_amount, payment_amount_applied')
+        .select('mail_drop_id, order_id, customer_name, product_category, fulfillment_path, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, actual_postage, mail_method, mail_drop_quantity, mail_drop_amount, order_amount, payment_amount_applied')
         .in('order_status', FORECAST_STATUSES)
         .gte('drop_est_date', windowStart)
         .lte('drop_est_date', in12w),
@@ -294,6 +303,9 @@ export default function ForecastPage() {
 
       const cat = d.product_category || 'Unknown';
       weekMap[ws][`p_${cat}`] = (weekMap[ws][`p_${cat}`] || 0) + p;
+
+      const lb = d.is_live_status ? 'Live' : 'Not Live';
+      weekMap[ws][`l_${lb}`] = (weekMap[ws][`l_${lb}`] || 0) + p;
     }
     return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week)).slice(0, 17);
   }, [drops, postage, nextWeekStart, includePast4Weeks, today]);
@@ -319,6 +331,8 @@ export default function ForecastPage() {
       if (ob) weekMap[ws][`o_${ob}`] = (weekMap[ws][`o_${ob}`] || 0) + p;
       const db = dropBucket(d.drop_status);
       if (db) weekMap[ws][`d_${db}`] = (weekMap[ws][`d_${db}`] || 0) + p;
+      const lb = d.is_live_status ? 'Live' : 'Not Live';
+      weekMap[ws][`l_${lb}`] = (weekMap[ws][`l_${lb}`] || 0) + p;
       weekMap[ws][`p_${selectedProduct}`] = (weekMap[ws][`p_${selectedProduct}`] || 0) + p;
     }
     return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week));
@@ -387,12 +401,19 @@ export default function ForecastPage() {
     for (const d of drops) { const b = dropBucket(d.drop_status); if (b) out[b] = (out[b] || 0) + postage(d); }
     return out;
   }, [drops, postage]);
+  const liveBucketTotals = useMemo(() => {
+    const out = {};
+    for (const d of drops) { const b = d.is_live_status ? 'Live' : 'Not Live'; out[b] = (out[b] || 0) + postage(d); }
+    return out;
+  }, [drops, postage]);
 
   const activeBuckets = chartMode === 'order' ? ORDER_BUCKETS
                       : chartMode === 'drop'  ? DROP_BUCKETS
+                      : chartMode === 'live'  ? LIVE_BUCKETS
                       : Object.fromEntries(productCategories.map(({ cat, color }) => [cat, color]));
   const prefix        = chartMode === 'order' ? 'o_'
                       : chartMode === 'drop'  ? 'd_'
+                      : chartMode === 'live'  ? 'l_'
                       : 'p_';
 
   if (loading) return <p style={{ color: 'var(--text-muted)' }} className="p-4">Loading...</p>;
@@ -501,7 +522,7 @@ export default function ForecastPage() {
             )}
           {/* Toggle */}
           <div className="flex rounded overflow-hidden" style={{ border: '1px solid var(--border)' }}>
-            {[['order', 'By Order Stage'], ['drop', 'By Drop Status'], ['product', 'By Product']].map(([mode, label]) => (
+            {[['order', 'By Order Stage'], ['drop', 'By Drop Status'], ['product', 'By Product'], ['live', 'Live vs Not-Live']].map(([mode, label]) => (
               <button key={mode} onClick={() => setChartMode(mode)}
                 className="text-xs px-3 py-1 font-medium"
                 style={{
@@ -521,6 +542,7 @@ export default function ForecastPage() {
           {Object.entries(activeBuckets).map(([bucket, color]) => {
             const totals    = chartMode === 'order' ? orderBucketTotals
                             : chartMode === 'drop'  ? dropBucketTotals
+                            : chartMode === 'live'  ? liveBucketTotals
                             : productTotals;
             const statusMap = chartMode === 'order' ? ORDER_BUCKET_STATUSES
                             : chartMode === 'drop'  ? DROP_BUCKET_STATUSES
