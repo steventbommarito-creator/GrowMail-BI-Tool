@@ -70,10 +70,28 @@ const DROP_BUCKETS = {
 // "Live" = drop is in production and its postage actually hits EPS (outsourced /
 // production / pending ship); "Not Live" = still upstream (scheduled, list
 // received, EDDM routes, etc.). Same definition used on the cashflow page.
+//
+// Not-live drops are graded against the HISTORICAL FLIP CURVE (Apr–Jul 2026,
+// 420 observed flips in drop_status_history × drop_date_history): cumulative
+// % of drops already live at N days before their scheduled date —
+//   14d: 13% · 10d: 30% · 8d: 56% · 7d: 75% · 5d: 90% · 3d: 96% · 0d: ~100%.
+// So a not-live drop ≤5 days out is in the last ~10% historically (behind pace);
+// 6–8 days out is inside the normal flip window; >8 days out is on pace.
 const LIVE_BUCKETS = {
-  'Live':     '#10b981',
-  'Not Live': '#9ca3af',
+  'Live':        '#10b981',
+  'Flip Window': '#f59e0b',   // ≤8 days out, not yet live — normal flip zone
+  'Behind Pace': '#ef4444',   // ≤5 days out (or past date), still not live
+  'On Pace':     '#9ca3af',   // >8 days out — too early to expect a flip
 };
+
+function liveBucket(d, today) {
+  if (d.is_live_status) return 'Live';
+  if (!d.drop_est_date) return 'On Pace';
+  const days = Math.round((new Date(d.drop_est_date + 'T00:00:00Z') - new Date(today + 'T00:00:00Z')) / 86400000);
+  if (days <= 5) return 'Behind Pace';
+  if (days <= 8) return 'Flip Window';
+  return 'On Pace';
+}
 
 const DROP_BUCKET_STATUSES = {
   'Pre-Mail':      ['NEW', 'LIST RECEIVED', 'SCHEDULED', 'MAILING_LIST_IMPORTED', 'INITIAL', 'QUOTED'],
@@ -304,7 +322,7 @@ export default function ForecastPage() {
       const cat = d.product_category || 'Unknown';
       weekMap[ws][`p_${cat}`] = (weekMap[ws][`p_${cat}`] || 0) + p;
 
-      const lb = d.is_live_status ? 'Live' : 'Not Live';
+      const lb = liveBucket(d, today);
       weekMap[ws][`l_${lb}`] = (weekMap[ws][`l_${lb}`] || 0) + p;
     }
     return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week)).slice(0, 17);
@@ -331,7 +349,7 @@ export default function ForecastPage() {
       if (ob) weekMap[ws][`o_${ob}`] = (weekMap[ws][`o_${ob}`] || 0) + p;
       const db = dropBucket(d.drop_status);
       if (db) weekMap[ws][`d_${db}`] = (weekMap[ws][`d_${db}`] || 0) + p;
-      const lb = d.is_live_status ? 'Live' : 'Not Live';
+      const lb = liveBucket(d, today);
       weekMap[ws][`l_${lb}`] = (weekMap[ws][`l_${lb}`] || 0) + p;
       weekMap[ws][`p_${selectedProduct}`] = (weekMap[ws][`p_${selectedProduct}`] || 0) + p;
     }
@@ -403,9 +421,9 @@ export default function ForecastPage() {
   }, [drops, postage]);
   const liveBucketTotals = useMemo(() => {
     const out = {};
-    for (const d of drops) { const b = d.is_live_status ? 'Live' : 'Not Live'; out[b] = (out[b] || 0) + postage(d); }
+    for (const d of drops) { const b = liveBucket(d, today); out[b] = (out[b] || 0) + postage(d); }
     return out;
-  }, [drops, postage]);
+  }, [drops, postage, today]);
 
   const activeBuckets = chartMode === 'order' ? ORDER_BUCKETS
                       : chartMode === 'drop'  ? DROP_BUCKETS
