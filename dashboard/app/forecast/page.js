@@ -222,7 +222,8 @@ export default function ForecastPage() {
   const [projectedDeposits, setProjectedDeposits] = useState([]);
   const [projectedDebits,   setProjectedDebits]   = useState([]);
   const [loading, setLoading]                   = useState(true);
-  const [chartMode, setChartMode]               = useState('product'); // 'order' | 'drop' | 'product'
+  const [chartMode, setChartMode]               = useState('product'); // 'order' | 'drop' | 'product' | 'live'
+  const [metricMode, setMetricMode]             = useState('postage'); // 'postage' | 'revenue' — chart/pills only; runway stays postage
   const [selectedProduct, setSelectedProduct]   = useState(null);
   // When true the load extends drop_est_date back 4 weeks so the trend chart /
   // weekly breakdown include the prior month for comparison. Filter is on
@@ -302,6 +303,15 @@ export default function ForecastPage() {
     [epsSet]
   );
 
+  // Chart metric: postage (default) or revenue (Mail Drop Amount). Revenue is
+  // gross — no EPS/LDP exclusions, since those only apply to postage cost.
+  // Used ONLY by the weekly chart + legend pills; the EPS runway always uses
+  // postage() via w.total.
+  const dropValue = useCallback(
+    (d) => (metricMode === 'revenue' ? (d.mail_drop_amount || 0) : postage(d)),
+    [metricMode, postage]
+  );
+
   // ── Product category totals & color palette ───────────────────────────────
   const PALETTE = ['#3b82f6','#10b981','#f59e0b','#8b5cf6','#ef4444','#06b6d4','#f97316','#84cc16','#ec4899','#14b8a6','#a855f7','#6366f1'];
 
@@ -341,8 +351,11 @@ export default function ForecastPage() {
         // weeks whose Sunday is before this week's Sunday are "past"
         isPast: ws < currentWeekStart,
       };
-      const p  = postage(d);
-      weekMap[ws].total += p;
+      // w.total is ALWAYS postage — it feeds the EPS runway. The bucket keys
+      // (chart segments) follow the selected metric (postage or revenue).
+      weekMap[ws].total += postage(d);
+      const p = dropValue(d);
+      weekMap[ws].metricTotal = (weekMap[ws].metricTotal || 0) + p;
 
       const ob = orderBucket(d.order_status);
       if (ob) weekMap[ws][`o_${ob}`] = (weekMap[ws][`o_${ob}`] || 0) + p;
@@ -358,9 +371,9 @@ export default function ForecastPage() {
       weekMap[ws].knownCount = (weekMap[ws].knownCount || 0) + 1;
     }
     // Projected arrivals overlay (Live vs Not-Live mode only). Dollarize the
-    // historical arrival counts with the avg postage of known future drops.
+    // historical arrival counts with the avg value (per metric) of known future drops.
     const future = Object.values(weekMap).filter((w) => !w.isPast);
-    const futPost = future.reduce((s, w) => s + w.total, 0);
+    const futPost = future.reduce((s, w) => s + (w.metricTotal || 0), 0);
     const futCnt  = future.reduce((s, w) => s + (w.knownCount || 0), 0);
     const avgPost = futCnt ? futPost / futCnt : 0;
     if (avgPost > 0) {
@@ -371,7 +384,7 @@ export default function ForecastPage() {
       }
     }
     return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week)).slice(0, 17);
-  }, [drops, postage, nextWeekStart, includePast4Weeks, today]);
+  }, [drops, postage, dropValue, nextWeekStart, includePast4Weeks, today]);
 
   // ── Filtered chart data when a product is selected ────────────────────────
   const chartWeeklyBreakdown = useMemo(() => {
@@ -388,7 +401,7 @@ export default function ForecastPage() {
         week: ws, label: weekRangeLabel(ws), total: 0,
         isPast: ws < currentWeekStart,
       };
-      const p = postage(d);
+      const p = dropValue(d);
       weekMap[ws].total += p;
       const ob = orderBucket(d.order_status);
       if (ob) weekMap[ws][`o_${ob}`] = (weekMap[ws][`o_${ob}`] || 0) + p;
@@ -399,7 +412,7 @@ export default function ForecastPage() {
       weekMap[ws][`p_${selectedProduct}`] = (weekMap[ws][`p_${selectedProduct}`] || 0) + p;
     }
     return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week));
-  }, [drops, weeklyBreakdown, selectedProduct, postage, includePast4Weeks, nextWeekStart, today]);
+  }, [drops, weeklyBreakdown, selectedProduct, dropValue, includePast4Weeks, nextWeekStart, today]);
 
   // ── EPS runway ────────────────────────────────────────────────────────────
   const runwayData = useMemo(() => {
@@ -456,21 +469,29 @@ export default function ForecastPage() {
   // Bucket totals for pills
   const orderBucketTotals = useMemo(() => {
     const out = {};
-    for (const d of drops) { const b = orderBucket(d.order_status); if (b) out[b] = (out[b] || 0) + postage(d); }
+    for (const d of drops) { const b = orderBucket(d.order_status); if (b) out[b] = (out[b] || 0) + dropValue(d); }
     return out;
-  }, [drops, postage]);
+  }, [drops, dropValue]);
   const dropBucketTotals = useMemo(() => {
     const out = {};
-    for (const d of drops) { const b = dropBucket(d.drop_status); if (b) out[b] = (out[b] || 0) + postage(d); }
+    for (const d of drops) { const b = dropBucket(d.drop_status); if (b) out[b] = (out[b] || 0) + dropValue(d); }
     return out;
-  }, [drops, postage]);
+  }, [drops, dropValue]);
   const liveBucketTotals = useMemo(() => {
     const out = {};
-    for (const d of drops) { const b = liveBucket(d, today); out[b] = (out[b] || 0) + postage(d); }
+    for (const d of drops) { const b = liveBucket(d, today); out[b] = (out[b] || 0) + dropValue(d); }
     const proj = weeklyBreakdown.reduce((s, w) => s + (w['l_Projected Arrivals'] || 0), 0);
     if (proj > 0) out['Projected Arrivals'] = proj;
     return out;
-  }, [drops, postage, today, weeklyBreakdown]);
+  }, [drops, dropValue, today, weeklyBreakdown]);
+  // Metric-aware product totals for the legend pills. productTotals (postage)
+  // stays untouched — it drives the stable color assignment and the
+  // "Postage by Product Type" section below.
+  const productMetricTotals = useMemo(() => {
+    const out = {};
+    for (const d of drops) { const cat = d.product_category || 'Unknown'; out[cat] = (out[cat] || 0) + dropValue(d); }
+    return out;
+  }, [drops, dropValue]);
 
   const activeBuckets = chartMode === 'order' ? ORDER_BUCKETS
                       : chartMode === 'drop'  ? DROP_BUCKETS
@@ -565,12 +586,24 @@ export default function ForecastPage() {
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
-              Postage by Week
+              {metricMode === 'revenue' ? 'Revenue by Week' : 'Postage by Week'}
             </h2>
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}
-              title="Actual postage once production has priced the drop, otherwise Est. Postage. Excludes LDP-method drops and drops already charged in EPS. Not drop revenue.">
-              postage $ only
-            </span>
+            <div className="flex rounded overflow-hidden" style={{ border: '1px solid var(--border)' }}
+              title={metricMode === 'postage'
+                ? 'Postage: actual once priced, else Est. Postage. Excludes LDP-method drops and drops already charged in EPS.'
+                : 'Revenue: Mail Drop Amount (gross, per drop). No EPS/LDP exclusions. Chart & pills only — the EPS runway below stays postage-based.'}>
+              {[['postage', 'Postage $'], ['revenue', 'Revenue $']].map(([m, label]) => (
+                <button key={m} onClick={() => setMetricMode(m)}
+                  className="text-xs px-2 py-0.5 font-medium"
+                  style={{
+                    background: metricMode === m ? 'var(--accent)' : 'var(--surface2)',
+                    color: metricMode === m ? 'var(--accent-text)' : 'var(--text-secondary)',
+                    borderLeft: m === 'revenue' ? '1px solid var(--border)' : 'none',
+                  }}>
+                  {label}
+                </button>
+              ))}
+            </div>
             {selectedProduct && (
               <span className="flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full font-medium"
                 style={{ background: (productColorMap[selectedProduct] || 'var(--accent)') + '22', color: productColorMap[selectedProduct] || 'var(--accent)', border: `1px solid ${productColorMap[selectedProduct] || 'var(--accent)'}55` }}>
@@ -612,7 +645,7 @@ export default function ForecastPage() {
             const totals    = chartMode === 'order' ? orderBucketTotals
                             : chartMode === 'drop'  ? dropBucketTotals
                             : chartMode === 'live'  ? liveBucketTotals
-                            : productTotals;
+                            : productMetricTotals;
             const statusMap = chartMode === 'order' ? ORDER_BUCKET_STATUSES
                             : chartMode === 'drop'  ? DROP_BUCKET_STATUSES
                             : null;
