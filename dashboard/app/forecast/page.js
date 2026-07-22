@@ -82,7 +82,22 @@ const LIVE_BUCKETS = {
   'Flip Window': '#f59e0b',   // ≤8 days out, not yet live — normal flip zone
   'Behind Pace': '#ef4444',   // ≤5 days out (or past date), still not live
   'On Pace':     '#9ca3af',   // >8 days out — too early to expect a flip
+  'Projected Arrivals': '#93c5fd',   // orders not yet in the system (see model below)
 };
+
+// ─── Order-arrival ("backfill") projection ────────────────────────────────────
+// From the drop_date_history cohort analysis (8 completed weeks, Jun–Jul 2026):
+// future weeks fill in with orders that aren't in the system yet, at a stable
+// ABSOLUTE volume (avg final ≈129 non-canceled drops/week, range 107–162), not
+// a multiplier. Avg drops still to arrive at N weeks out:
+//   1w: ~60 · 2w: ~86 · 3w: ~92 · 4w: ~105 · 5w+: ~107 (no data beyond 5w).
+// Dollarized with the avg postage of currently-known future drops — treat as a
+// ±25% directional band, not precise dollars. Chart-only: NOT added to week
+// totals, so the EPS runway stays driven by real known drops.
+// weekly_pipeline_snapshots (capturing since 2026-07-22) will let us refit
+// these constants — and add quote-aware conversion — from exact history.
+const ARRIVALS_BY_WEEKS_OUT = { 0: 8, 1: 60, 2: 86, 3: 92, 4: 105, 5: 107 };
+const arrivalsFor = (wo) => (wo < 0 ? 0 : ARRIVALS_BY_WEEKS_OUT[Math.min(wo, 5)] ?? 0);
 
 function liveBucket(d, today) {
   if (d.is_live_status) return 'Live';
@@ -324,6 +339,20 @@ export default function ForecastPage() {
 
       const lb = liveBucket(d, today);
       weekMap[ws][`l_${lb}`] = (weekMap[ws][`l_${lb}`] || 0) + p;
+      weekMap[ws].knownCount = (weekMap[ws].knownCount || 0) + 1;
+    }
+    // Projected arrivals overlay (Live vs Not-Live mode only). Dollarize the
+    // historical arrival counts with the avg postage of known future drops.
+    const future = Object.values(weekMap).filter((w) => !w.isPast);
+    const futPost = future.reduce((s, w) => s + w.total, 0);
+    const futCnt  = future.reduce((s, w) => s + (w.knownCount || 0), 0);
+    const avgPost = futCnt ? futPost / futCnt : 0;
+    if (avgPost > 0) {
+      for (const w of future) {
+        const wo = Math.round((new Date(w.week + 'T00:00:00Z') - new Date(currentWeekStart + 'T00:00:00Z')) / (7 * 86400000));
+        const proj = arrivalsFor(wo) * avgPost;
+        if (proj > 0) w['l_Projected Arrivals'] = proj;   // chart-only; w.total untouched (runway unaffected)
+      }
     }
     return Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week)).slice(0, 17);
   }, [drops, postage, nextWeekStart, includePast4Weeks, today]);
@@ -422,8 +451,10 @@ export default function ForecastPage() {
   const liveBucketTotals = useMemo(() => {
     const out = {};
     for (const d of drops) { const b = liveBucket(d, today); out[b] = (out[b] || 0) + postage(d); }
+    const proj = weeklyBreakdown.reduce((s, w) => s + (w['l_Projected Arrivals'] || 0), 0);
+    if (proj > 0) out['Projected Arrivals'] = proj;
     return out;
-  }, [drops, postage, today]);
+  }, [drops, postage, today, weeklyBreakdown]);
 
   const activeBuckets = chartMode === 'order' ? ORDER_BUCKETS
                       : chartMode === 'drop'  ? DROP_BUCKETS
@@ -590,7 +621,8 @@ export default function ForecastPage() {
             {Object.entries(activeBuckets).map(([bucket, color]) => (
               <Bar key={bucket} dataKey={`${prefix}${bucket}`} name={bucket} stackId="a" fill={color}>
                 {chartWeeklyBreakdown.map((w, i) => (
-                  <Cell key={i} fill={color} fillOpacity={w.isPast ? 0.32 : 1} />
+                  <Cell key={i} fill={color}
+                    fillOpacity={bucket === 'Projected Arrivals' ? 0.45 : (w.isPast ? 0.32 : 1)} />
                 ))}
               </Bar>
             ))}
