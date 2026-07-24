@@ -60,7 +60,7 @@ async function buildSourceMap() {
 }
 
 // SFDC display name → Freshworks display name, where they differ.
-const OWNER_ALIASES = { 'danielle dennis': 'dani dennis' };
+const OWNER_ALIASES = { 'danielle dennis': 'dani dennis', 'stephanie hanna': 'stephanie grabowski' };
 
 // display name(lowercased) → owner id.
 async function buildOwnerByName() {
