@@ -1,0 +1,48 @@
+name: CRM Address + Phone Backfill
+
+# SFDC address/phone backfill: fill-only-empty updates to ~11k accounts and
+# matched contacts, plus ~2.5k contact creates. Rows pre-staged in Supabase.
+#
+# Runs hourly from 6pm ET (22:00 UTC) through 9am ET so the API budget is
+# consumed off-hours. First run does the two view scans (prepare); later runs
+# skip straight to draining. Every step is resumable; runs no-op once both
+# imports are complete (then delete this file).
+
+on:
+  schedule:
+    - cron: '0 22,23,0,1,2,3,4,5,6,7,8,9,10,11,12,13 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: crm-address-update
+  cancel-in-progress: false
+
+env:
+  CI: 'true'
+  FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+  FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - name: Prepare accounts (scan, first run only)
+        run: node crm-import/address-update.js prepare-accounts
+      - name: Prepare contacts (scan, first run only)
+        run: node crm-import/address-update.js prepare-contacts
+      - name: Drain accounts
+        run: node crm-import/address-update.js drain-accounts
+        env:
+          MAX_RUNTIME_MS: '4200000'
+      - name: Drain contacts
+        run: node crm-import/address-update.js drain-contacts
+        env:
+          MAX_RUNTIME_MS: '2400000'
