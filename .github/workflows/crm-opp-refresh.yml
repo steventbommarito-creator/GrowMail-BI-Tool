@@ -1,0 +1,37 @@
+name: CRM Opp Refresh (dedupe/enrich/order-ID)
+
+# Audit + enrich the 2,570-row SFDC opportunities export and cycle order IDs
+# (0 → original) to re-fire the cf_order_link formula field. Rows pre-staged in
+# Supabase; no deal creates. Resumable; runs no-op once complete (delete then).
+#
+# Shares the FW 2000/hr cap with the address workflow — both self-throttle on
+# 429, so concurrent runs are correct, just slower.
+
+on:
+  schedule:
+    - cron: '45 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: crm-opp-refresh
+  cancel-in-progress: false
+
+env:
+  CI: 'true'
+  MAX_RUNTIME_MS: '3000000'
+  FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+  FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node crm-import/opp-refresh.js drain
