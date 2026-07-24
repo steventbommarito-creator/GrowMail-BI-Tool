@@ -59,6 +59,9 @@ async function buildSourceMap() {
   return map;
 }
 
+// SFDC display name → Freshworks display name, where they differ.
+const OWNER_ALIASES = { 'danielle dennis': 'dani dennis' };
+
 // display name(lowercased) → owner id.
 async function buildOwnerByName() {
   const r = await C.fs('GET', '/selector/owners');
@@ -67,6 +70,9 @@ async function buildOwnerByName() {
   for (const u of r.data.users || []) {
     const nm = String(u.display_name || '').trim().toLowerCase();
     if (nm) byName[nm] = u.id;
+  }
+  for (const [alias, target] of Object.entries(OWNER_ALIASES)) {
+    if (byName[target]) byName[alias] = byName[target];
   }
   return byName;
 }
