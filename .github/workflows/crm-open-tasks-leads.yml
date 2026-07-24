@@ -1,0 +1,52 @@
+name: CRM Open Tasks + Missing Leads
+
+# July 2026 one-shot import: open SFDC tasks (Scheduled Call Backs + open KPI
+# tasks) and missing June/July leads. All rows are pre-staged in Supabase, so
+# runs are fully cloud-side — computer can be off.
+#
+# Steps run sequentially (the Freshsales 2000/hr rate cap is account-wide):
+#   1. open-tasks prepare — resolve targets (lookup / create-lead / account search)
+#   2. open-tasks drain   — POST /tasks
+#   3. leads drain        — lookup → skip existing, else POST /contacts
+# Each step honors MAX_RUNTIME_MS and is resumable; the hourly schedule picks up
+# any leftovers, and runs become no-ops once both imports are complete (safe to
+# delete this file then).
+
+on:
+  schedule:
+    - cron: '15 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: crm-open-tasks-leads
+  cancel-in-progress: false
+
+env:
+  CI: 'true'
+  FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+  FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 250
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - name: Open-tasks prepare
+        run: node crm-import/open-tasks-import.js prepare
+        env:
+          MAX_RUNTIME_MS: '6000000'
+      - name: Open-tasks drain
+        run: node crm-import/open-tasks-import.js drain
+        env:
+          MAX_RUNTIME_MS: '4800000'
+      - name: Leads drain
+        run: node crm-import/sfdc-leads-import.js drain
+        env:
+          MAX_RUNTIME_MS: '3600000'
