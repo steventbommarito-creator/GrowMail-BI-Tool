@@ -31,7 +31,7 @@ const STATUS_EXCLUDE = new Set(['INCOMPLETE']);
 // Osprey seller display name → FW user display name, where they differ.
 // FW renamed "Danielle Dennis" → "Dani Dennis", so map the long form onto the
 // current name; Stephanie Hanna is Stephanie Grabowski in FW.
-const SELLER_ALIAS = { 'danielle dennis': 'dani dennis', 'stephanie hanna': 'stephanie grabowski' };
+const SELLER_ALIAS = { 'danielle dennis': 'dani dennis', 'stephanie hanna': 'stephanie grabowski', 'nick krutko': 'nicholas krutko' };
 
 function stageForStatus(status) {
   const s = String(status || '').trim().toUpperCase();
