@@ -34,10 +34,11 @@ async function findAccount(name) {
 }
 
 // Create a Sales Account from an Osprey order. Returns id or null.
+// Order-backed accounts are real by definition → tagged 'Real Account' at birth.
 async function createAccount(order) {
   const name = String(order.customer_name || '').trim();
   if (!name) return null;
-  const payload = { sales_account: { name: name.slice(0, 255), custom_field: {} } };
+  const payload = { sales_account: { name: name.slice(0, 255), tags: ['Real Account'], custom_field: {} } };
   if (order.web_id) payload.sales_account.custom_field.cf_webid = toInt(order.web_id);
   if (order.customer_id) payload.sales_account.custom_field.cf_sf_acct_id = String(order.customer_id);
   const r = await C.fs('POST', '/sales_accounts', payload);

@@ -132,8 +132,10 @@ async function report() {
 
 // ── tag (after approval) ────────────────────────────────────────────────────
 async function tag() {
-  const imp = await findImport(['mapping', 'pushing']);
-  if (!imp) { console.log('Nothing staged.'); return; }
+  // 'mapping' = scan still staging rows — don't drain yet, or an early
+  // pending-exhaustion would mark the import complete mid-scan.
+  const imp = await findImport(['ready', 'pushing']);
+  if (!imp) { console.log('No finished scan to tag (still scanning, or nothing staged).'); return; }
   await C.supabase.from('crm_imports').update({ status: 'pushing' }).eq('id', imp.id);
   const limit = argLimit();
   const started = Date.now();

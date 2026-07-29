@@ -1,0 +1,35 @@
+name: CRM Real Account Tag (Phase 1)
+
+# Applies the 'Real Account' tag to the ~24k FW accounts identified by the
+# real-accounts scan (SFDC created>=2018 OR opp>=2018, plus order-backed).
+# No-ops until the scan import is flipped to 'ready'. ~24k PUTs ≈ 13h at the
+# shared rate cap, hourly-resumable. Delete once complete.
+
+on:
+  schedule:
+    - cron: '40 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: crm-real-account-tag
+  cancel-in-progress: false
+
+env:
+  CI: 'true'
+  MAX_RUNTIME_MS: '3000000'
+  FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+  FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node crm-import/real-accounts.js tag
