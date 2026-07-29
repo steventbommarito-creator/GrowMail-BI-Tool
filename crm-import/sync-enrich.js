@@ -16,6 +16,22 @@ const CUSTOMER_STATUS = 127004203351;      // "Won" (default status under Custom
 const WON_STAGE = C.STAGE_IDS.Won;
 
 const toInt = (v) => { const n = parseInt(String(v ?? '').replace(/[^\d-]/g, ''), 10); return Number.isFinite(n) ? n : 0; };
+const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// Find an existing account for an Osprey customer name, tolerant of Osprey's
+// punctuation/spacing (e.g. "H.Brickman&Sons" ↔ "H Brickman & Sons"): exact
+// filtered_search first, then a keyword /search compared on a normalized key.
+// Returns account id or null (caller creates on null).
+async function findAccount(name) {
+  const nm = String(name || '').trim();
+  if (!nm) return null;
+  const key = normName(nm);
+  const f = await C.fs('POST', '/filtered_search/sales_account', { filter_rule: [{ attribute: 'name', operator: 'is', value: nm }] });
+  if (f.ok) { const hit = (f.data?.sales_accounts || []).find((a) => normName(a.name) === key); if (hit) return hit.id; }
+  const s = await C.fs('GET', `/search?q=${encodeURIComponent(nm.replace(/[^a-zA-Z0-9 ]/g, ' ').trim().slice(0, 100))}&include=sales_account&per_page=10`);
+  if (s.ok) { const hit = (s.data || []).find((a) => normName(a.name) === key); if (hit) return Number(hit.id); }
+  return null;
+}
 
 // Create a Sales Account from an Osprey order. Returns id or null.
 async function createAccount(order) {
@@ -75,6 +91,6 @@ async function logContactGap(order, acctId) {
 }
 
 module.exports = {
-  CUSTOMER_LIFECYCLE, CUSTOMER_STATUS, WON_STAGE,
-  createAccount, accountContacts, promoteToCustomer, linkContactToAccount, logContactGap,
+  CUSTOMER_LIFECYCLE, CUSTOMER_STATUS, WON_STAGE, normName,
+  findAccount, createAccount, accountContacts, promoteToCustomer, linkContactToAccount, logContactGap,
 };

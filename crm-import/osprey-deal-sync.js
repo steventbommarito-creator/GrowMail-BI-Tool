@@ -139,11 +139,11 @@ function toInt(v) { const n = parseInt(String(v ?? '').replace(/[^\d-]/g, ''), 1
 // name → account id, matching an existing account or CREATING one if none.
 // Tracks creates via stats. Cached per run (extends the resolveAccount cache).
 async function ensureAccount(o, stats) {
-  let id = await resolveAccount(o.customer_name);
-  if (!id) {
-    id = await E.createAccount(o);
-    if (id) { stats.accountsCreated++; acctCache.set(String(o.customer_name || '').trim().toLowerCase(), id); }
-  }
+  const key = String(o.customer_name || '').trim().toLowerCase();
+  if (acctCache.has(key)) return acctCache.get(key);
+  let id = await E.findAccount(o.customer_name);       // exact + normalized match
+  if (!id) { id = await E.createAccount(o); if (id) stats.accountsCreated++; }
+  acctCache.set(key, id);
   return id;
 }
 

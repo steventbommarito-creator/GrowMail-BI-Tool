@@ -1,0 +1,34 @@
+name: CRM Account Backfill (Osprey orphans)
+
+# Batch 1: give every Osprey-sync deal an account. Links/creates accounts for the
+# ~491 deals with fw_account_id=null and attaches the account's contact. Resumable
+# (fixed rows drop out via state). Delete once complete.
+
+on:
+  schedule:
+    - cron: '50 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: crm-account-backfill
+  cancel-in-progress: false
+
+env:
+  CI: 'true'
+  MAX_RUNTIME_MS: '3000000'
+  FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+  FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node crm-import/account-backfill-osprey.js

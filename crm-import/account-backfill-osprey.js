@@ -12,16 +12,6 @@
 const C = require('./common');
 const E = require('./sync-enrich');
 
-async function matchAccount(name) {
-  const nm = String(name || '').trim();
-  if (!nm) return null;
-  const r = await C.fs('POST', '/filtered_search/sales_account', { filter_rule: [{ attribute: 'name', operator: 'is', value: nm }] });
-  if (!r.ok) return null;
-  const list = r.data?.sales_accounts || [];
-  const hit = list.find((a) => String(a.name || '').trim().toLowerCase() === nm.toLowerCase()) || list[0];
-  return hit ? hit.id : null;
-}
-
 async function main() {
   const limArg = process.argv.indexOf('--limit');
   const limit = limArg > -1 ? Number(process.argv[limArg + 1]) : 0;
@@ -38,7 +28,7 @@ async function main() {
     if (!rows || !rows.length) break;
     for (const row of rows) {
       const order = { order_id: row.order_id, customer_id: row.customer_id, customer_name: row.customer_name };
-      let acctId = await matchAccount(row.customer_name);
+      let acctId = await E.findAccount(row.customer_name);
       if (acctId) stats.matched++;
       else { acctId = await E.createAccount(order); if (acctId) stats.created++; }
       if (!acctId) { stats.failed++; done++; continue; }   // no name → cannot make an account
