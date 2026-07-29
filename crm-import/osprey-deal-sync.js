@@ -20,6 +20,7 @@
  *   cf_sf_oppty_id    = "{customer_id}-{order_id}"  (unique guard: contains the unique order id)
  */
 const C = require('./common');
+const E = require('./sync-enrich');
 
 const QUOTED = C.STAGE_IDS.Quoted, WON = C.STAGE_IDS.Won, LOST = C.STAGE_IDS.Lost;
 // Explicit buckets; everything not listed here (all the active/production/design
@@ -135,7 +136,18 @@ async function loadOrders() {
 
 function toInt(v) { const n = parseInt(String(v ?? '').replace(/[^\d-]/g, ''), 10); return Number.isFinite(n) ? n : 0; }
 
-function buildDealFields(o, acctId, ownerId) {
+// name → account id, matching an existing account or CREATING one if none.
+// Tracks creates via stats. Cached per run (extends the resolveAccount cache).
+async function ensureAccount(o, stats) {
+  let id = await resolveAccount(o.customer_name);
+  if (!id) {
+    id = await E.createAccount(o);
+    if (id) { stats.accountsCreated++; acctCache.set(String(o.customer_name || '').trim().toLowerCase(), id); }
+  }
+  return id;
+}
+
+function buildDealFields(o, acctId, ownerId, contactId) {
   const name = `${o.customer_name || 'Unknown'} – ${o.product_category || 'Order'} (#${o.order_id})`.slice(0, 255);
   const deal = {
     name,
@@ -150,8 +162,18 @@ function buildDealFields(o, acctId, ownerId) {
     },
   };
   if (acctId) deal.sales_account_id = acctId;
+  if (contactId) deal.contacts_added_list = [contactId];
   if (o.drop_est_date) deal.expected_close = o.drop_est_date;
   return deal;
+}
+
+// Promote every contact on an account to Customer (never downgrades). Returns count set.
+async function promoteAccountCustomers(acctId) {
+  let set = 0;
+  for (const ct of await E.accountContacts(acctId)) {
+    if ((await E.promoteToCustomer(ct.id, ct.lifecycle_stage_id)) === 'set') set++;
+  }
+  return set;
 }
 
 async function main() {
@@ -172,7 +194,7 @@ async function main() {
       if (data.length < 1000) break; from += 1000;
   } }
 
-  const stats = { created: 0, updated: 0, unchanged: 0, excluded: 0, failed: 0, ownerFromAccount: 0, ownerCsDefault: 0, unknownStatus: {} };
+  const stats = { created: 0, updated: 0, unchanged: 0, excluded: 0, failed: 0, ownerFromAccount: 0, ownerCsDefault: 0, accountsCreated: 0, contactsLinked: 0, contactGaps: 0, customersPromoted: 0, unknownStatus: {} };
   const started = Date.now();
   const MAX_RUNTIME_MS = Number(process.env.MAX_RUNTIME_MS || (process.env.CI ? 330 * 60 * 1000 : 0));
   for (const o of orders) {
@@ -188,16 +210,19 @@ async function main() {
     const amount = o.order_amount != null ? Number(o.order_amount) : 0;
 
     if (!prev) {
-      // NEW order -> create deal. Owner: seller mapping first; if the seller is
-      // blank/departed/placeholder, fill from the account (then its contacts);
-      // else CS.
-      const acctId = await resolveAccount(o.customer_name);
+      // NEW order -> ensure account (create if missing), attach the account's
+      // existing contact (else log the gap), then create the deal. Owner: seller
+      // mapping first; if unresolved, fill from the account/contacts; else CS.
+      const acctId = await ensureAccount(o, stats);
       let ownerId = resolveSellerOwner(ownerByName, o.seller), ownerSrc = 'seller';
       if (!ownerId && acctId) { ownerId = await resolveAccountOwner(acctId); if (ownerId) ownerSrc = 'account'; }
       if (!ownerId) { ownerId = C.CS_OWNER_ID; ownerSrc = 'cs-default'; }
       if (ownerSrc === 'account') stats.ownerFromAccount++;
       else if (ownerSrc === 'cs-default') stats.ownerCsDefault++;
-      const deal = buildDealFields(o, acctId, ownerId);
+
+      const contacts = acctId ? await E.accountContacts(acctId) : [];
+      const contactId = contacts[0]?.id || null;    // link the account's primary contact
+      const deal = buildDealFields(o, acctId, ownerId, contactId);
       if (dryRun) { stats.created++; if (stats.created <= 5) console.log('CREATE', ownerSrc, JSON.stringify(deal)); continue; }
       const res = await C.fs('POST', '/deals', { deal });
       if (res.ok && res.data?.deal?.id) {
@@ -207,9 +232,16 @@ async function main() {
           last_amount: amount, fw_account_id: acctId ? String(acctId) : null, excluded: false,
         });
         stats.created++;
+        if (contactId) stats.contactsLinked++;
+        else if (acctId) { stats.contactGaps++; await E.logContactGap(o, acctId); }
+        // Won order -> promote the account's contacts to Customer.
+        if (stage === WON && acctId) {
+          for (const ct of contacts) if ((await E.promoteToCustomer(ct.id, ct.lifecycle_stage_id)) === 'set') stats.customersPromoted++;
+        }
       } else { stats.failed++; console.error(`create failed order ${o.order_id}: ${res.status} ${res.error}`); }
     } else {
-      // EXISTING -> update only if stage or amount changed
+      // EXISTING -> update stage/amount only if changed; on a transition INTO Won,
+      // promote the account's contacts to Customer.
       const stageChanged = String(prev.last_stage_id) !== String(stage);
       const amtChanged = Number(prev.last_amount) !== amount;
       if (!stageChanged && !amtChanged) { stats.unchanged++; continue; }
@@ -220,6 +252,7 @@ async function main() {
           last_status: o.order_status, last_stage_id: stage, last_amount: amount, updated_at: new Date().toISOString(),
         }).eq('order_id', o.order_id);
         stats.updated++;
+        if (stageChanged && stage === WON && prev.fw_account_id) stats.customersPromoted += await promoteAccountCustomers(prev.fw_account_id);
       } else { stats.failed++; console.error(`update failed order ${o.order_id}: ${res.status} ${res.error}`); }
     }
     if (limit && (stats.created + stats.updated) >= limit) { console.log(`--limit ${limit} reached`); break; }
@@ -227,6 +260,7 @@ async function main() {
 
   console.log(`\n${dryRun ? 'DRY RUN ' : ''}done:`, JSON.stringify({ ...stats, unknownStatus: undefined }));
   console.log(`owner source on creates — from account/contacts: ${stats.ownerFromAccount}, CS default (no seller/account owner): ${stats.ownerCsDefault}`);
+  console.log(`enrichment — accounts created: ${stats.accountsCreated}, contacts linked: ${stats.contactsLinked}, contact gaps (logged): ${stats.contactGaps}, contacts promoted to Customer: ${stats.customersPromoted}`);
   const uk = Object.keys(stats.unknownStatus);
   if (uk.length) console.log('statuses treated as WON by default (review if any should be Quoted/Lost):', stats.unknownStatus);
 }
