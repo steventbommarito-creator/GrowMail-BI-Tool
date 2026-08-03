@@ -21,16 +21,25 @@ const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 // Find an existing account for an Osprey customer name, tolerant of Osprey's
 // punctuation/spacing (e.g. "H.Brickman&Sons" ↔ "H Brickman & Sons"): exact
 // filtered_search first, then a keyword /search compared on a normalized key.
-// Returns account id or null (caller creates on null).
+// When SEVERAL accounts share the name (real account + lead-shells from the
+// migration), prefer the one tagged 'Real Account' so deals never attach to a
+// shell. Returns account id or null (caller creates on null).
 async function findAccount(name) {
   const nm = String(name || '').trim();
   if (!nm) return null;
   const key = normName(nm);
+  const cands = [];
   const f = await C.fs('POST', '/filtered_search/sales_account', { filter_rule: [{ attribute: 'name', operator: 'is', value: nm }] });
-  if (f.ok) { const hit = (f.data?.sales_accounts || []).find((a) => normName(a.name) === key); if (hit) return hit.id; }
+  if (f.ok) for (const a of f.data?.sales_accounts || []) if (normName(a.name) === key) cands.push(Number(a.id));
   const s = await C.fs('GET', `/search?q=${encodeURIComponent(nm.replace(/[^a-zA-Z0-9 ]/g, ' ').trim().slice(0, 100))}&include=sales_account&per_page=10`);
-  if (s.ok) { const hit = (s.data || []).find((a) => normName(a.name) === key); if (hit) return Number(hit.id); }
-  return null;
+  if (s.ok) for (const a of s.data || []) if (normName(a.name) === key) cands.push(Number(a.id));
+  const uniq = [...new Set(cands)];
+  if (uniq.length <= 1) return uniq[0] || null;
+  for (const id of uniq.slice(0, 5)) {          // collision: prefer the tagged real account
+    const g = await C.fs('GET', `/sales_accounts/${id}`);
+    if ((g.data?.sales_account?.tags || []).includes('Real Account')) return id;
+  }
+  return uniq[0];
 }
 
 // Create a Sales Account from an Osprey order. Returns id or null.
