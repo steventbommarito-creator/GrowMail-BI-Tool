@@ -1,0 +1,69 @@
+name: CRM Repair Chain (1, 1.5, 2, 3)
+
+# Runs the repair plan strictly in priority order; each step no-ops once its
+# stage is complete, so hourly reruns finish whatever remains:
+#   1   deal close dates            (28k → true SFDC Close Date)
+#   1.5 deal → account linking      (SFDC AccountId join, ~28k)
+#   2   contact ↔ account matching  (SFDC 88k: associate/create + 927 accounts)
+#   3   Osprey deal contacts        (customer-page scrape → find-or-create+link)
+# Load steps are idempotent (no-op when already staged) and run in the cloud.
+# FRESHSALES_RATE 20000 per the plan upgrade (client 429-backoff self-adapts).
+# Delete this file when all four report complete.
+
+on:
+  schedule:
+    - cron: '25 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: crm-repair-chain
+  cancel-in-progress: false
+
+env:
+  CI: 'true'
+  FRESHSALES_RATE: '20000'
+  FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+  FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+  SFDC_INSTANCE_URL: ${{ secrets.SFDC_INSTANCE_URL }}
+  SFDC_CLIENT_ID: ${{ secrets.SFDC_CLIENT_ID }}
+  SFDC_CLIENT_SECRET: ${{ secrets.SFDC_CLIENT_SECRET }}
+  OSPREY_URL: ${{ secrets.OSPREY_URL }}
+  OSPREY_USER: ${{ secrets.OSPREY_USER }}
+  OSPREY_PASS: ${{ secrets.OSPREY_PASS }}
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: npx playwright install chromium --with-deps
+        timeout-minutes: 10
+      - name: 1 — close dates
+        run: node crm-import/deal-close-dates.js drain
+        env:
+          MAX_RUNTIME_MS: '5400000'
+      - name: 1.5 — deal→account (stage)
+        run: node crm-import/deal-accounts.js load
+      - name: 1.5 — deal→account (drain)
+        run: node crm-import/deal-accounts.js drain
+        env:
+          MAX_RUNTIME_MS: '5400000'
+      - name: 2 — contact↔account (stage)
+        run: node crm-import/contact-account.js load
+      - name: 2 — contact↔account (drain)
+        run: node crm-import/contact-account.js drain
+        env:
+          MAX_RUNTIME_MS: '7200000'
+      - name: 3 — osprey contacts (stage)
+        run: node crm-import/osprey-contact-fill.js load
+      - name: 3 — osprey contacts (drain)
+        run: node crm-import/osprey-contact-fill.js drain
+        env:
+          MAX_RUNTIME_MS: '2700000'
