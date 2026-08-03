@@ -81,6 +81,8 @@ async function drain() {
   const started = Date.now();
   const MAX = Number(process.env.MAX_RUNTIME_MS || 0);
   let done = 0, ok = 0, failed = 0;
+  const writes = [];   // bookkeeping writes run async so they don't pace the FS calls
+  const flushWrites = async () => { await Promise.all(writes.splice(0)); };
   for (;;) {
     if (MAX && Date.now() - started >= MAX) { console.log('Runtime budget reached — exiting (resumable).'); break; }
     const { data: rows } = await C.supabase.from('crm_import_rows').select('id, fs_id, raw_json')
@@ -89,14 +91,17 @@ async function drain() {
     for (const row of rows) {
       const r = await C.fs('PUT', `/deals/${row.fs_id}`, { deal: { sales_account_id: row.raw_json.fw_account_id } });
       const now = new Date().toISOString();
-      if (r.ok) { await C.supabase.from('crm_import_rows').update({ status: 'sent', attempted_at: now }).eq('id', row.id); ok++; }
-      else { await C.supabase.from('crm_import_rows').update({ status: 'failed', error_message: `PUT ${r.status}`, attempted_at: now }).eq('id', row.id); failed++; }
+      if (r.ok) { writes.push(C.supabase.from('crm_import_rows').update({ status: 'sent', attempted_at: now }).eq('id', row.id)); ok++; }
+      else { writes.push(C.supabase.from('crm_import_rows').update({ status: 'failed', error_message: `PUT ${r.status}`, attempted_at: now }).eq('id', row.id)); failed++; }
       done++;
+      if (writes.length >= 50) await flushWrites();
       if (done % 500 === 0) console.log(`  ${done} — ok:${ok} failed:${failed}`);
       if (limit && done >= limit) break;
     }
+    await flushWrites();
     if (limit && done >= limit) break;
   }
+  await flushWrites();
   const { count: left } = await C.supabase.from('crm_import_rows').select('id', { count: 'exact', head: true }).eq('import_id', imp.id).eq('status', 'pending');
   if (!left) { await C.supabase.from('crm_imports').update({ status: 'complete', completed_at: new Date().toISOString() }).eq('id', imp.id); console.log('deal-accounts complete.'); }
   console.log(`deal-accounts: ${ok} linked, ${failed} failed. Pending: ${left || 0}.`);
