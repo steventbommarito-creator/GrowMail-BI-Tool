@@ -30,8 +30,9 @@ async function load() {
   if (await findImport(['pushing'])) { console.log('osprey-contact-fill already staged.'); return; }
   const rows = [];
   for (let f = 0; ; f += 1000) {
-    const { data } = await C.supabase.from('osprey_deal_sync')
-      .select('order_id, fw_deal_id, fw_account_id, customer_id, customer_name, seller').range(f, f + 999);
+    const { data, error } = await C.supabase.from('osprey_deal_sync')
+      .select('order_id, fw_deal_id, fw_account_id, customer_id, customer_name').range(f, f + 999);
+    if (error) throw new Error(`osprey_deal_sync read failed: ${error.message}`);
     if (!data || !data.length) break;
     rows.push(...data.filter((r) => r.fw_deal_id));
     if (data.length < 1000) break;
@@ -117,7 +118,7 @@ async function drain() {
         const contact = {
           first_name: String(cust.first || '').slice(0, 100) || 'Unknown', last_name: String(cust.last || '').slice(0, 100),
           emails: [{ value: cust.email, is_primary: true }],
-          owner_id: ownerByName[String(r.seller || '').trim().toLowerCase()] || C.CS_OWNER_ID,
+          owner_id: g.data?.deal?.owner_id || C.CS_OWNER_ID,   // contact follows the deal's owner
           custom_field: { cf_lead_sf_id: L.genSfid() },
         };
         if (cust.phone) contact.work_number = String(cust.phone).slice(0, 30);

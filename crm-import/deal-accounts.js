@@ -41,8 +41,12 @@ async function load() {
   for (const o of opps) oppToAcct.set(String(o.Id).slice(0, 15), String(o.AccountId).slice(0, 15));
   console.log(`opp→account pairs: ${oppToAcct.size}`);
 
-  const { data: imps } = await C.supabase.from('crm_imports').select('id, total_rows').eq('import_type', 'opportunities').eq('status', 'complete');
-  const orig = (imps || []).find((i) => i.total_rows > 10000);
+  // the ORIGINAL 28k import specifically — several other staging imports are
+  // also type=opportunities/complete/28k rows (close-dates bit us here once)
+  const { data: imps } = await C.supabase.from('crm_imports').select('id, total_rows, original_filename')
+    .eq('import_type', 'opportunities').eq('status', 'complete');
+  const orig = (imps || []).find((i) => /^SFDC Opportunities 2022\+/.test(i.original_filename || ''));
+  if (!orig) throw new Error('original SFDC opportunities import not found by filename');
   const { data: imp } = await C.supabase.from('crm_imports').insert({
     import_type: 'opportunities', original_filename: 'Deal→account linking (SFDC AccountId join)',
     total_rows: 0, sheet_name: 'deal-accounts', status: 'pushing', uploaded_by: 'script:deal-accounts',
