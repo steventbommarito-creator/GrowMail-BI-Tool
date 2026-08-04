@@ -32,7 +32,7 @@ async function findImport(marker, statuses) {
 function argLimit() { const i = process.argv.indexOf('--limit'); return i > -1 ? Number(process.argv[i + 1]) : 0; }
 
 async function load() {
-  if (await findImport(MARKER, ['pushing'])) { console.log('contact-account already staged.'); return; }
+  if (await findImport(MARKER, ['pushing', 'complete'])) { console.log('contact-account already staged or complete.'); return; }
   console.log('Pulling contacts from SFDC…');
   const rows = await S.queryAll(
     'SELECT Id, FirstName, LastName, Email, Phone, Title, AccountId, Account.Name, Owner.Name FROM Contact WHERE AccountId != null',

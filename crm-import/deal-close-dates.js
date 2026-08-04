@@ -23,7 +23,7 @@ function argLimit() { const i = process.argv.indexOf('--limit'); return i > -1 ?
 const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 
 async function load() {
-  if (await findImport(['pushing'])) { console.log('Already staged.'); return; }
+  if (await findImport(['pushing', 'complete'])) { console.log('Already staged or complete.'); return; }
   const { data: imps } = await C.supabase.from('crm_imports').select('id, total_rows')
     .eq('import_type', 'opportunities').eq('status', 'complete');
   const orig = (imps || []).find((i) => i.total_rows > 10000);

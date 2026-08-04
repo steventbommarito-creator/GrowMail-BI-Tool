@@ -21,7 +21,7 @@ async function findImport(marker, statuses) {
 function argLimit() { const i = process.argv.indexOf('--limit'); return i > -1 ? Number(process.argv[i + 1]) : 0; }
 
 async function load() {
-  if (await findImport(MARKER, ['pushing'])) { console.log('deal-accounts already staged.'); return; }
+  if (await findImport(MARKER, ['pushing', 'complete'])) { console.log('deal-accounts already staged or complete.'); return; }
 
   // SFDC↔FW account map from the real-accounts staging (sf_id 18-char → fw fs_id)
   const real = await findImport(REAL_MARKER, ['complete', 'ready', 'pushing']);

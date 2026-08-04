@@ -27,7 +27,7 @@ async function findImport(statuses) {
 function argLimit() { const i = process.argv.indexOf('--limit'); return i > -1 ? Number(process.argv[i + 1]) : 0; }
 
 async function load() {
-  if (await findImport(['pushing'])) { console.log('osprey-contact-fill already staged.'); return; }
+  if (await findImport(['pushing', 'complete'])) { console.log('osprey-contact-fill already staged or complete.'); return; }
   const rows = [];
   for (let f = 0; ; f += 1000) {
     const { data, error } = await C.supabase.from('osprey_deal_sync')
@@ -74,11 +74,18 @@ async function ospreyToken() {
 async function ospreyCustomer(token, customerId) {
   const r = await fetch(`https://api.onebrand.io/api/v1/customers/${customerId}`, { headers: { authorization: token } });
   if (!r.ok) return null;
-  const d = (await r.json()).data || {};
+  const j = await r.json();
+  const d = j.data || j;                       // API alternates between {data:{...}} and the raw object
   const addr = d.defaultBillingAddress || {};
+  let email = String(d.customer_email || '').trim().toLowerCase();
+  if (!email && (d.UserCustomers || []).length === 1) {
+    // fall back to the single linked platform user — but never agency-internal logins
+    const ur = await fetch(`https://api.onebrand.io/api/v1/users/${d.UserCustomers[0].user_id}`, { headers: { authorization: token } });
+    if (ur.ok) { const uj = await ur.json(); const u = uj.data || uj; const ue = String(u.email || '').trim().toLowerCase(); if (ue && !/@onebrand/i.test(ue)) email = ue; }
+  }
   return {
     first: d.first_name || '', last: d.last_name || '',
-    email: String(d.customer_email || '').trim().toLowerCase(), phone: d.customer_phone || '',
+    email, phone: d.customer_phone || '',
     address: addr.address_line_1 || '', city: addr.city || '', state: addr.state_code || '', zip: addr.zip_code || '',
   };
 }
