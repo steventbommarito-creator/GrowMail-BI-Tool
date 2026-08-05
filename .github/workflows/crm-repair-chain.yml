@@ -67,3 +67,4 @@ jobs:
         run: node crm-import/osprey-contact-fill.js drain
         env:
           MAX_RUNTIME_MS: '2700000'
+          DEBUG_OSPREY: '1'

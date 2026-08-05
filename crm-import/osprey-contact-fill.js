@@ -73,9 +73,10 @@ async function ospreyToken() {
 
 async function ospreyCustomer(token, customerId) {
   const r = await fetch(`https://api.onebrand.io/api/v1/customers/${customerId}`, { headers: { authorization: token } });
-  if (!r.ok) return null;
+  if (!r.ok) { if (process.env.DEBUG_OSPREY) console.log(`  DBG cust ${customerId}: HTTP ${r.status}`); return null; }
   const j = await r.json();
   const d = j.data || j;                       // API alternates between {data:{...}} and the raw object
+  if (process.env.DEBUG_OSPREY) console.log(`  DBG cust ${customerId}: keys=${Object.keys(d).slice(0, 12).join(',')} email=${JSON.stringify(d.customer_email)}`);
   const addr = d.defaultBillingAddress || {};
   let email = String(d.customer_email || '').trim().toLowerCase();
   if (!email && (d.UserCustomers || []).length === 1) {
