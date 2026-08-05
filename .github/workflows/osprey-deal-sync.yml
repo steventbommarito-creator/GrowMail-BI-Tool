@@ -6,12 +6,13 @@ name: Osprey Deal Sync
 # run reads fresh data without depending on the BI Scraper's timing. USPS is not
 # touched here — it stays on the BI Scraper's own schedule.
 #
-# Schedule (GitHub cron is UTC, no daylight-saving): hourly 7a–6p EST plus 9p &
-# 11p EST, using EST = UTC-5. In summer (EDT) these fire 1 hour later by the clock.
+# Schedule (GitHub cron is UTC, no daylight-saving): every 30 min 7a–6p EST plus
+# 9p & 11p EST, using EST = UTC-5. In summer (EDT) these fire 1 hour later by the
+# clock. Note GitHub schedules are best-effort and can drift a few minutes.
 
 on:
   schedule:
-    - cron: '0 2,4,12-23 * * *'   # 7a–6p EST (UTC 12–23) + 9p EST (UTC 2) + 11p EST (UTC 4)
+    - cron: '0,30 2,4,12-23 * * *'   # :00 and :30, 7a–6p EST (UTC 12–23) + 9p EST (UTC 2) + 11p EST (UTC 4)
   workflow_dispatch:
 
 concurrency:
