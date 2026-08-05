@@ -1,0 +1,38 @@
+name: CRM One-Off Runner
+
+# Manually-dispatched runner for one-shot crm-import scripts (cloud-only policy:
+# nothing runs on local machines). Pass the script (and args) as the input.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cmd:
+        description: 'Script + args under crm-import/, e.g. "close-lead-creation-tasks.js --dry-run"'
+        required: true
+
+env:
+  CI: 'true'
+  FRESHSALES_RATE: '20000'
+  MAX_RUNTIME_MS: '19800000'
+  FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+  FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+  SFDC_INSTANCE_URL: ${{ secrets.SFDC_INSTANCE_URL }}
+  SFDC_CLIENT_ID: ${{ secrets.SFDC_CLIENT_ID }}
+  SFDC_CLIENT_SECRET: ${{ secrets.SFDC_CLIENT_SECRET }}
+  OSPREY_URL: ${{ secrets.OSPREY_URL }}
+  OSPREY_USER: ${{ secrets.OSPREY_USER }}
+  OSPREY_PASS: ${{ secrets.OSPREY_PASS }}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node crm-import/${{ inputs.cmd }}
