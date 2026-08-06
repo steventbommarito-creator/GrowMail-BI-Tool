@@ -1,28 +1,37 @@
-name: Osprey Deal Sync
+name: Osprey Live Sync (3-min loop)
 
-# Scrapes the Gordon & Lance (Osprey) finance report fresh, then syncs those
-# orders into Freshworks deals: new order_id -> new deal, changed status/amount
-# -> update, INCOMPLETE -> skipped. Self-contained (scrape then sync) so each
-# run reads fresh data without depending on the BI Scraper's timing. USPS is not
-# touched here — it stays on the BI Scraper's own schedule.
-#
-# Schedule (GitHub cron is UTC, no daylight-saving): every 30 min 7a–6p EST plus
-# 9p & 11p EST, using EST = UTC-5. In summer (EDT) these fire 1 hour later by the
-# clock. Note GitHub schedules are best-effort and can drift a few minutes.
+# Near-real-time Osprey → Freshworks: one runner per hour that LOOPS for ~54
+# minutes — scrape finance report + deal-sync every ~3 minutes, lead-sync every
+# ~3rd iteration (~10 min). GitHub cron can't go below 5 min and pays 2-3 min
+# setup per run, so a continuous in-run loop is the only way to a true 3-minute
+# cadence. Hourly triggers chain the loops back-to-back during business hours
+# (7a–6p EST; +9p/11p EST catch-ups). Concurrency group prevents overlap.
 
 on:
   schedule:
-    - cron: '0,30 2,4,12-23 * * *'   # :00 and :30, 7a–6p EST (UTC 12–23) + 9p EST (UTC 2) + 11p EST (UTC 4)
+    - cron: '0 2,4,12-23 * * *'
   workflow_dispatch:
 
 concurrency:
   group: osprey-deal-sync
   cancel-in-progress: false
 
+env:
+  CI: 'true'
+  OSPREY_URL: ${{ secrets.OSPREY_URL }}
+  OSPREY_USER: ${{ secrets.OSPREY_USER }}
+  OSPREY_PASS: ${{ secrets.OSPREY_PASS }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
+  FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
+  TRIGGERED_BY: osprey-live-sync
+
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 58
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,22 +40,22 @@ jobs:
       - run: npm install
       - run: npx playwright install chromium --with-deps
         timeout-minutes: 10
-      - name: Scrape Osprey finance report -> osprey_mail_drops
-        run: node run.js
+      - name: Loop scrape + sync every ~3 minutes
         env:
           SCRAPE_SOURCE: osprey
-          OSPREY_URL: ${{ secrets.OSPREY_URL }}
-          OSPREY_USER: ${{ secrets.OSPREY_USER }}
-          OSPREY_PASS: ${{ secrets.OSPREY_PASS }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          TRIGGERED_BY: osprey-deal-sync
-      - name: Sync orders -> Freshworks deals
-        run: node crm-import/osprey-deal-sync.js
-        env:
-          CI: 'true'
-          FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
-          FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          MAX_RUNTIME_MS: '240000'   # per lead-sync pass; deal-sync is diff-cheap
+        run: |
+          end=$((SECONDS+3240))   # ~54 min of looping
+          i=0
+          while [ $SECONDS -lt $end ]; do
+            t0=$SECONDS
+            node run.js || echo "scrape failed (iteration $i) — continuing"
+            node crm-import/osprey-deal-sync.js || echo "deal-sync failed (iteration $i) — continuing"
+            if [ $((i % 3)) -eq 0 ]; then
+              node crm-import/osprey-lead-sync.js || echo "lead-sync failed (iteration $i) — continuing"
+            fi
+            i=$((i+1))
+            el=$((SECONDS-t0))
+            if [ $el -lt 180 ]; then sleep $((180-el)); fi
+          done
+          echo "loop done: $i iterations"

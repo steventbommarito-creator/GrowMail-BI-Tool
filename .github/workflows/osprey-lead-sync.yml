@@ -5,11 +5,10 @@ name: Osprey Lead Sync
 # each scrape. First run seeds the last 30 days; later runs only pick up new
 # signups (watermark in osprey_lead_sync). Resumable.
 
+# NOTE: scheduled runs moved into the Osprey Live Sync 3-minute loop
+# (osprey-deal-sync.yml) — lead-sync executes every ~10 min there. This
+# workflow remains dispatch-only for manual runs/backfills.
 on:
-  schedule:
-    # GitHub cron is UTC (no DST). Hourly 7a–6p EST (UTC 12–23) + 9p (UTC 2) +
-    # 11p (UTC 4), using EST = UTC-5; in summer (EDT) these fire 1 hour later.
-    - cron: '0 2,4,12-23 * * *'
   workflow_dispatch:
 
 concurrency:
