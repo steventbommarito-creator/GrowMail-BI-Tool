@@ -13,7 +13,8 @@
  * Field mapping (decided with the user):
  *   name              = "{Customer} – {Product Category} (#{order_id})"
  *   amount            = order_amount
- *   deal_stage_id     = order_status -> WON/QUOTED/LOST buckets (INCOMPLETE excluded)
+ *   deal_stage_id     = computeStage: Quoted / Won-Pending / Running / Complete
+ *                       from order status + actual drop mail dates (INCOMPLETE excluded)
  *   owner_id          = Seller -> FS user (Dani Dennis->Danielle Dennis; else Customer Service)
  *   sales_account_id  = match Customer name to an existing FS account, else blank
  *   cf_order_number   = order_id            cf_webid = web_id
@@ -22,25 +23,15 @@
 const C = require('./common');
 const E = require('./sync-enrich');
 
-const QUOTED = C.STAGE_IDS.Quoted, WON = C.STAGE_IDS.Won, LOST = C.STAGE_IDS.Lost;
-// Explicit buckets; everything not listed here (all the active/production/design
-// stages, plus LIMBO and DESIGN/PROOF DENIED) maps to WON, per the user.
+// Staging now lives in sync-enrich.computeStage (Quoted → Won-Pending →
+// Running → Complete from order status + actual drop mail dates).
 const STATUS_QUOTED = new Set(['QUOTE']);
 const STATUS_LOST = new Set(['CANCELED', 'VOID']);
-const STATUS_EXCLUDE = new Set(['INCOMPLETE']);
 
 // Osprey seller display name → FW user display name, where they differ.
 // FW renamed "Danielle Dennis" → "Dani Dennis", so map the long form onto the
 // current name; Stephanie Hanna is Stephanie Grabowski in FW.
 const SELLER_ALIAS = { 'danielle dennis': 'dani dennis', 'stephanie hanna': 'stephanie grabowski', 'nick krutko': 'nicholas krutko' };
-
-function stageForStatus(status) {
-  const s = String(status || '').trim().toUpperCase();
-  if (STATUS_EXCLUDE.has(s)) return null;          // no deal
-  if (STATUS_LOST.has(s)) return LOST;
-  if (STATUS_QUOTED.has(s)) return QUOTED;
-  return WON;                                        // everything else
-}
 
 async function buildOwnerByName() {
   const r = await C.fs('GET', '/selector/owners');
@@ -106,26 +97,43 @@ async function resolveAccount(name) {
 
 // Collapse osprey_mail_drops to one record per order_id (order-level fields).
 async function loadOrders() {
+  // Latest snapshot ONLY — the table retains prior snapshots, and stale rows
+  // would corrupt the per-drop aggregation the new staging depends on.
+  const { data: snap } = await C.supabase.from('osprey_mail_drops')
+    .select('snapshot_id').order('captured_at', { ascending: false }).limit(1);
+  const snapId = snap?.[0]?.snapshot_id;
+  if (!snapId) throw new Error('no osprey snapshot found');
+
   const byOrder = new Map();
   let from = 0;
   for (;;) {
     const { data, error } = await C.supabase
       .from('osprey_mail_drops')
-      .select('order_id,order_status,order_amount,customer_id,customer_name,seller,web_id,product_category,drop_est_date')
+      .select('order_id,order_status,order_amount,customer_id,customer_name,seller,web_id,product_category,drop_number,total_drops,drop_est_date,drop_act_date')
+      .eq('snapshot_id', snapId)
       .range(from, from + 999);
     if (error) throw new Error(`osprey_mail_drops read failed: ${error.message}`);
     if (!data.length) break;
     for (const r of data) {
       if (!r.order_id) continue;
-      const cur = byOrder.get(r.order_id);
+      let cur = byOrder.get(r.order_id);
       if (!cur) {
-        byOrder.set(r.order_id, {
+        cur = {
           order_id: r.order_id, order_status: r.order_status, order_amount: r.order_amount,
           customer_id: r.customer_id, customer_name: r.customer_name, seller: r.seller,
           web_id: r.web_id, product_category: r.product_category, drop_est_date: r.drop_est_date,
-        });
+          drops: { minDrop: null, anyAct: false, finalAct: false },
+        };
+        byOrder.set(r.order_id, cur);
       } else if (r.drop_est_date && (!cur.drop_est_date || r.drop_est_date < cur.drop_est_date)) {
         cur.drop_est_date = r.drop_est_date; // keep earliest drop date
+      }
+      const dn = Number(r.drop_number) || null;
+      const total = Number(r.total_drops) || null;
+      if (dn && (!cur.drops.minDrop || dn < cur.drops.minDrop)) cur.drops.minDrop = dn;
+      if (r.drop_act_date) {
+        cur.drops.anyAct = true;
+        if (dn && total && dn === total) cur.drops.finalAct = true;   // last drop mailed
       }
     }
     if (data.length < 1000) break;
@@ -153,7 +161,7 @@ function buildDealFields(o, acctId, ownerId, contactId) {
     name,
     amount: o.order_amount != null ? Number(o.order_amount) : 0,
     deal_pipeline_id: C.DEAL_PIPELINE_ID,
-    deal_stage_id: stageForStatus(o.order_status),
+    deal_stage_id: E.computeStage(o.order_status, o.drops),
     owner_id: ownerId,
     custom_field: {
       cf_order_number: toInt(o.order_id),
@@ -199,7 +207,7 @@ async function main() {
   const MAX_RUNTIME_MS = Number(process.env.MAX_RUNTIME_MS || (process.env.CI ? 330 * 60 * 1000 : 0));
   for (const o of orders) {
     if (MAX_RUNTIME_MS && Date.now() - started >= MAX_RUNTIME_MS) { console.log('Runtime budget reached — exiting (resumable via state).'); break; }
-    const stage = stageForStatus(o.order_status);
+    const stage = E.computeStage(o.order_status, o.drops);
     if (stage === null) { stats.excluded++; continue; }               // INCOMPLETE — skip
     const known = STATUS_QUOTED.has(String(o.order_status).toUpperCase()) ||
                   STATUS_LOST.has(String(o.order_status).toUpperCase()) ||
@@ -235,7 +243,7 @@ async function main() {
         if (contactId) stats.contactsLinked++;
         else if (acctId) { stats.contactGaps++; await E.logContactGap(o, acctId); }
         // Won order -> promote the account's contacts to Customer.
-        if (stage === WON && acctId) {
+        if (E.WON_SET.has(stage) && acctId) {
           for (const ct of contacts) if ((await E.promoteToCustomer(ct.id, ct.lifecycle_stage_id)) === 'set') stats.customersPromoted++;
         }
       } else { stats.failed++; console.error(`create failed order ${o.order_id}: ${res.status} ${res.error}`); }
@@ -252,7 +260,7 @@ async function main() {
           last_status: o.order_status, last_stage_id: stage, last_amount: amount, updated_at: new Date().toISOString(),
         }).eq('order_id', o.order_id);
         stats.updated++;
-        if (stageChanged && stage === WON && prev.fw_account_id) stats.customersPromoted += await promoteAccountCustomers(prev.fw_account_id);
+        if (stageChanged && E.WON_SET.has(stage) && !E.WON_SET.has(Number(prev.last_stage_id)) && prev.fw_account_id) stats.customersPromoted += await promoteAccountCustomers(prev.fw_account_id);
       } else { stats.failed++; console.error(`update failed order ${o.order_id}: ${res.status} ${res.error}`); }
     }
     if (limit && (stats.created + stats.updated) >= limit) { console.log(`--limit ${limit} reached`); break; }

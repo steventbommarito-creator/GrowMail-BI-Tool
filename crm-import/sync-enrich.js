@@ -11,6 +11,33 @@
  */
 const C = require('./common');
 
+// New deal pipeline (2026-09): Quoted → Won-Pending → Running → Complete,
+// driven by Osprey status + per-drop ACTUAL mail dates. NOTE: stage
+// 127003582554 is the OLD Quoted renamed to "Incomplete" (pre-quote bucket,
+// unused for now); legacy Won (127003582559) is retired go-forward.
+const STAGES = {
+  INCOMPLETE: 127003582554, QUOTED: 127003732398, WON_PENDING: 127003732403,
+  RUNNING: 127003732399, COMPLETE: 127003732402, WON_LEGACY: 127003582559, LOST: 127003582560,
+};
+const WON_SET = new Set([STAGES.WON_PENDING, STAGES.RUNNING, STAGES.COMPLETE, STAGES.WON_LEGACY]);
+
+// Stage from order status + drop aggregate. drops = { minDrop, finalAct, anyAct }
+// where finalAct = the drop with drop_number === total_drops has an actual mail
+// date, anyAct = any visible drop mailed, minDrop = lowest visible drop number
+// (the report windows long series, so minDrop > 1 means earlier drops already
+// went out). Returns a stage id, or null for excluded (pre-quote INCOMPLETE).
+function computeStage(orderStatus, drops) {
+  const s = String(orderStatus || '').trim().toUpperCase();
+  if (s === 'INCOMPLETE') return null;
+  if (s === 'CANCELED' || s === 'VOID') return STAGES.LOST;
+  if (s === 'QUOTE') return STAGES.QUOTED;
+  if (s === 'COMPLETE') return STAGES.COMPLETE;
+  const d = drops || {};
+  if (d.finalAct) return STAGES.COMPLETE;
+  if (d.anyAct || (d.minDrop && d.minDrop > 1)) return STAGES.RUNNING;
+  return STAGES.WON_PENDING;
+}
+
 const CUSTOMER_LIFECYCLE = 128081818857;   // "Customer"
 const CUSTOMER_STATUS = 127004203351;      // "Won" (default status under Customer)
 const WON_STAGE = C.STAGE_IDS.Won;
@@ -101,6 +128,6 @@ async function logContactGap(order, acctId) {
 }
 
 module.exports = {
-  CUSTOMER_LIFECYCLE, CUSTOMER_STATUS, WON_STAGE, normName,
+  CUSTOMER_LIFECYCLE, CUSTOMER_STATUS, WON_STAGE, normName, STAGES, WON_SET, computeStage,
   findAccount, createAccount, accountContacts, promoteToCustomer, linkContactToAccount, logContactGap,
 };
