@@ -157,6 +157,18 @@ function expectedCloseFor(stage, o) {
   return o.drop_est_date || null;
 }
 
+// Estimated = next upcoming (else first known) drop date; Actual = latest
+// drop that has actually mailed. Updated on every deal write, so Actual
+// advances drop by drop and equals the final mail date at Complete.
+function mailDateFields(o) {
+  const d = o.drops || {};
+  const out = {};
+  const est = d.nextUnmailedEst || d.firstFutureEst || o.drop_est_date;
+  if (est) out.cf_estimated_mail_date = est;
+  if (d.maxAct) out.cf_actual_mail_date = d.maxAct;
+  return out;
+}
+
 function toInt(v) { const n = parseInt(String(v ?? '').replace(/[^\d-]/g, ''), 10); return Number.isFinite(n) ? n : 0; }
 
 // name → account id, matching an existing account or CREATING one if none.
@@ -182,6 +194,7 @@ function buildDealFields(o, acctId, ownerId, contactId) {
       cf_order_number: toInt(o.order_id),
       cf_webid: toInt(o.web_id),
       cf_sf_oppty_id: `${o.customer_id || 'NA'}-${o.order_id}`,
+      ...mailDateFields(o),
     },
   };
   if (acctId) deal.sales_account_id = acctId;
@@ -275,6 +288,8 @@ async function main() {
       if (dryRun) { stats.updated++; continue; }
       const upd = { deal_stage_id: stage, amount };
       if (expClose) upd.expected_close = expClose;
+      const mdf = mailDateFields(o);
+      if (Object.keys(mdf).length) upd.custom_field = mdf;
       const res = await C.fs('PUT', `/deals/${prev.fw_deal_id}`, { deal: upd });
       if (res.ok) {
         await C.supabase.from('osprey_deal_sync').update({
