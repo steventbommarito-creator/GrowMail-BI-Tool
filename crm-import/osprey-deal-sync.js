@@ -109,7 +109,7 @@ async function loadOrders() {
   for (;;) {
     const { data, error } = await C.supabase
       .from('osprey_mail_drops')
-      .select('order_id,order_status,order_amount,customer_id,customer_name,seller,web_id,product_category,drop_number,total_drops,drop_est_date,drop_act_date')
+      .select('order_id,order_status,order_amount,customer_id,customer_name,seller,web_id,product_category,mail_drop_id,drop_number,total_drops,drop_est_date,drop_act_date')
       .eq('snapshot_id', snapId)
       .range(from, from + 999);
     if (error) throw new Error(`osprey_mail_drops read failed: ${error.message}`);
@@ -123,6 +123,7 @@ async function loadOrders() {
           customer_id: r.customer_id, customer_name: r.customer_name, seller: r.seller,
           web_id: r.web_id, product_category: r.product_category, drop_est_date: r.drop_est_date,
           drops: { minDrop: null, anyAct: false, finalAct: false, firstFutureEst: null, nextUnmailedEst: null, maxAct: null },
+          dropLog: {},
         };
         byOrder.set(r.order_id, cur);
       } else if (r.drop_est_date && (!cur.drop_est_date || r.drop_est_date < cur.drop_est_date)) {
@@ -139,6 +140,7 @@ async function loadOrders() {
         if (r.drop_act_date > (cur.drops.maxAct || '')) cur.drops.maxAct = r.drop_act_date;
         if (dn && total && dn === total) cur.drops.finalAct = true;   // last drop mailed
       }
+      if (dn) cur.dropLog[dn] = { id: r.mail_drop_id || null, est: r.drop_est_date || null, act: r.drop_act_date || null, total: total || null };
     }
     if (data.length < 1000) break;
     from += 1000;
@@ -167,6 +169,29 @@ function mailDateFields(o) {
   if (est) out.cf_estimated_mail_date = est;
   if (d.maxAct) out.cf_actual_mail_date = d.maxAct;
   return out;
+}
+
+// Merge this cycle's visible drops into the durable per-order log (the report
+// windows long series, so drops that scroll out of view must persist), then
+// render the deal's Drop Schedule textarea: one line per drop.
+function mergeDropLog(prevLog, visible) {
+  const log = { ...(prevLog || {}) };
+  for (const [dn, d] of Object.entries(visible || {})) {
+    const old = log[dn] || {};
+    log[dn] = { id: d.id || old.id || null, est: d.est || old.est || null, act: d.act || old.act || null, total: d.total || old.total || null };
+  }
+  return log;
+}
+function renderDropSchedule(log) {
+  const keys = Object.keys(log || {}).map(Number).sort((a, b) => a - b);
+  if (!keys.length) return null;
+  const total = Math.max(...keys.map((k) => Number(log[k].total) || 0), keys[keys.length - 1]);
+  let lines = keys.map((k) => {
+    const d = log[k];
+    return `Drop ${k}/${total} | Mail ID ${d.id || '—'} | Sched ${d.est || '—'} | Mailed ${d.act || '—'}`;
+  });
+  if (lines.join('\n').length > 3800) lines = ['(earliest drops omitted)'].concat(lines.slice(-60));
+  return lines.join('\n');
 }
 
 function toInt(v) { const n = parseInt(String(v ?? '').replace(/[^\d-]/g, ''), 10); return Number.isFinite(n) ? n : 0; }
@@ -219,6 +244,9 @@ async function main() {
   const dryRun = process.argv.includes('--dry-run');
 
   const ownerByName = await buildOwnerByName();
+  const df = await C.fs('GET', '/settings/deals/fields');
+  const hasDropField = (df.data?.fields || []).some((f) => f.name === 'cf_drop_schedule');
+  if (!hasDropField) console.log('cf_drop_schedule not found in FW — Drop Schedule writes disabled until the field is created (Admin > Deals > add textarea "Drop Schedule")');
   const orders = await loadOrders();
   console.log(`orders in current Osprey data: ${orders.length}`);
 
@@ -260,6 +288,8 @@ async function main() {
       const contacts = acctId ? await E.accountContacts(acctId) : [];
       const contactId = contacts[0]?.id || null;    // link the account's primary contact
       const deal = buildDealFields(o, acctId, ownerId, contactId);
+      const createLog = mergeDropLog(null, o.dropLog);
+      if (hasDropField) { const sched = renderDropSchedule(createLog); if (sched) deal.custom_field.cf_drop_schedule = sched; }
       if (dryRun) { stats.created++; if (stats.created <= 5) console.log('CREATE', ownerSrc, JSON.stringify(deal)); continue; }
       const res = await C.fs('POST', '/deals', { deal });
       if (res.ok && res.data?.deal?.id) {
@@ -267,7 +297,7 @@ async function main() {
           order_id: o.order_id, fw_deal_id: String(res.data.deal.id), customer_id: o.customer_id,
           customer_name: o.customer_name, last_status: o.order_status, last_stage_id: stage,
           last_amount: amount, last_expected_close: expectedCloseFor(stage, o) || null,
-          fw_account_id: acctId ? String(acctId) : null, excluded: false,
+          drop_log: createLog, fw_account_id: acctId ? String(acctId) : null, excluded: false,
         });
         stats.created++;
         if (contactId) stats.contactsLinked++;
@@ -284,16 +314,19 @@ async function main() {
       const amtChanged = Number(prev.last_amount) !== amount;
       const expClose = expectedCloseFor(stage, o);
       const expChanged = String(prev.last_expected_close || '') !== String(expClose || '');
-      if (!stageChanged && !amtChanged && !expChanged) { stats.unchanged++; continue; }
+      const newLog = mergeDropLog(prev.drop_log, o.dropLog);
+      const logChanged = JSON.stringify(newLog) !== JSON.stringify(prev.drop_log || {});
+      if (!stageChanged && !amtChanged && !expChanged && !logChanged) { stats.unchanged++; continue; }
       if (dryRun) { stats.updated++; continue; }
       const upd = { deal_stage_id: stage, amount };
       if (expClose) upd.expected_close = expClose;
       const mdf = mailDateFields(o);
+      if (hasDropField) { const sched = renderDropSchedule(newLog); if (sched) mdf.cf_drop_schedule = sched; }
       if (Object.keys(mdf).length) upd.custom_field = mdf;
       const res = await C.fs('PUT', `/deals/${prev.fw_deal_id}`, { deal: upd });
       if (res.ok) {
         await C.supabase.from('osprey_deal_sync').update({
-          last_status: o.order_status, last_stage_id: stage, last_amount: amount, last_expected_close: expClose, updated_at: new Date().toISOString(),
+          last_status: o.order_status, last_stage_id: stage, last_amount: amount, last_expected_close: expClose, drop_log: newLog, updated_at: new Date().toISOString(),
         }).eq('order_id', o.order_id);
         stats.updated++;
         if (stageChanged && E.WON_SET.has(stage) && !E.WON_SET.has(Number(prev.last_stage_id)) && prev.fw_account_id) stats.customersPromoted += await promoteAccountCustomers(prev.fw_account_id);
