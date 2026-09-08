@@ -15,11 +15,15 @@ const C = require('./common');
 // driven by Osprey status + per-drop ACTUAL mail dates. NOTE: stage
 // 127003582554 is the OLD Quoted renamed to "Incomplete" (pre-quote bucket,
 // unused for now); legacy Won (127003582559) is retired go-forward.
+// 2026-09 pipeline rework, final form: the old Won (Closed-Won type) was
+// RENAMED to "Complete" — so finished campaigns are closed-won for forecasting
+// and stop rotting; the interim Open-type Complete (127003732402) was deleted.
+// The 23k historical won deals share this stage with new completes by design.
 const STAGES = {
   INCOMPLETE: 127003582554, QUOTED: 127003732398, WON_PENDING: 127003732403,
-  RUNNING: 127003732399, COMPLETE: 127003732402, WON_LEGACY: 127003582559, LOST: 127003582560,
+  RUNNING: 127003732399, COMPLETE: 127003582559, LOST: 127003582560,
 };
-const WON_SET = new Set([STAGES.WON_PENDING, STAGES.RUNNING, STAGES.COMPLETE, STAGES.WON_LEGACY]);
+const WON_SET = new Set([STAGES.WON_PENDING, STAGES.RUNNING, STAGES.COMPLETE]);
 
 // Stage from order status + drop aggregate. drops = { minDrop, finalAct, anyAct }
 // where finalAct = the drop with drop_number === total_drops has an actual mail

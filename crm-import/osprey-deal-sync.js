@@ -122,7 +122,7 @@ async function loadOrders() {
           order_id: r.order_id, order_status: r.order_status, order_amount: r.order_amount,
           customer_id: r.customer_id, customer_name: r.customer_name, seller: r.seller,
           web_id: r.web_id, product_category: r.product_category, drop_est_date: r.drop_est_date,
-          drops: { minDrop: null, anyAct: false, finalAct: false },
+          drops: { minDrop: null, anyAct: false, finalAct: false, firstFutureEst: null, nextUnmailedEst: null, maxAct: null },
         };
         byOrder.set(r.order_id, cur);
       } else if (r.drop_est_date && (!cur.drop_est_date || r.drop_est_date < cur.drop_est_date)) {
@@ -131,8 +131,12 @@ async function loadOrders() {
       const dn = Number(r.drop_number) || null;
       const total = Number(r.total_drops) || null;
       if (dn && (!cur.drops.minDrop || dn < cur.drops.minDrop)) cur.drops.minDrop = dn;
+      const today = new Date().toISOString().slice(0, 10);
+      if (r.drop_est_date && r.drop_est_date >= today && (!cur.drops.firstFutureEst || r.drop_est_date < cur.drops.firstFutureEst)) cur.drops.firstFutureEst = r.drop_est_date;
+      if (!r.drop_act_date && r.drop_est_date && (!cur.drops.nextUnmailedEst || r.drop_est_date < cur.drops.nextUnmailedEst)) cur.drops.nextUnmailedEst = r.drop_est_date;
       if (r.drop_act_date) {
         cur.drops.anyAct = true;
+        if (r.drop_act_date > (cur.drops.maxAct || '')) cur.drops.maxAct = r.drop_act_date;
         if (dn && total && dn === total) cur.drops.finalAct = true;   // last drop mailed
       }
     }
@@ -140,6 +144,17 @@ async function loadOrders() {
     from += 1000;
   }
   return [...byOrder.values()];
+}
+
+// Stage-aware expected close: Quoted/Won-Pending look at the first FUTURE drop,
+// Running advances to the next UNMAILED drop each cycle, Complete pins to the
+// final actual mail date — so healthy deals never show as overdue in FW.
+function expectedCloseFor(stage, o) {
+  const d = o.drops || {};
+  if (stage === E.STAGES.COMPLETE) return d.maxAct || o.drop_est_date || null;
+  if (stage === E.STAGES.RUNNING) return d.nextUnmailedEst || d.firstFutureEst || d.maxAct || o.drop_est_date || null;
+  if (stage === E.STAGES.QUOTED || stage === E.STAGES.WON_PENDING) return d.firstFutureEst || d.nextUnmailedEst || o.drop_est_date || null;
+  return o.drop_est_date || null;
 }
 
 function toInt(v) { const n = parseInt(String(v ?? '').replace(/[^\d-]/g, ''), 10); return Number.isFinite(n) ? n : 0; }
@@ -171,7 +186,8 @@ function buildDealFields(o, acctId, ownerId, contactId) {
   };
   if (acctId) deal.sales_account_id = acctId;
   if (contactId) deal.contacts_added_list = [contactId];
-  if (o.drop_est_date) deal.expected_close = o.drop_est_date;
+  const ec = expectedCloseFor(E.computeStage(o.order_status, o.drops), o);
+  if (ec) deal.expected_close = ec;
   return deal;
 }
 
@@ -237,7 +253,8 @@ async function main() {
         await C.supabase.from('osprey_deal_sync').insert({
           order_id: o.order_id, fw_deal_id: String(res.data.deal.id), customer_id: o.customer_id,
           customer_name: o.customer_name, last_status: o.order_status, last_stage_id: stage,
-          last_amount: amount, fw_account_id: acctId ? String(acctId) : null, excluded: false,
+          last_amount: amount, last_expected_close: expectedCloseFor(stage, o) || null,
+          fw_account_id: acctId ? String(acctId) : null, excluded: false,
         });
         stats.created++;
         if (contactId) stats.contactsLinked++;
@@ -252,12 +269,16 @@ async function main() {
       // promote the account's contacts to Customer.
       const stageChanged = String(prev.last_stage_id) !== String(stage);
       const amtChanged = Number(prev.last_amount) !== amount;
-      if (!stageChanged && !amtChanged) { stats.unchanged++; continue; }
+      const expClose = expectedCloseFor(stage, o);
+      const expChanged = String(prev.last_expected_close || '') !== String(expClose || '');
+      if (!stageChanged && !amtChanged && !expChanged) { stats.unchanged++; continue; }
       if (dryRun) { stats.updated++; continue; }
-      const res = await C.fs('PUT', `/deals/${prev.fw_deal_id}`, { deal: { deal_stage_id: stage, amount } });
+      const upd = { deal_stage_id: stage, amount };
+      if (expClose) upd.expected_close = expClose;
+      const res = await C.fs('PUT', `/deals/${prev.fw_deal_id}`, { deal: upd });
       if (res.ok) {
         await C.supabase.from('osprey_deal_sync').update({
-          last_status: o.order_status, last_stage_id: stage, last_amount: amount, updated_at: new Date().toISOString(),
+          last_status: o.order_status, last_stage_id: stage, last_amount: amount, last_expected_close: expClose, updated_at: new Date().toISOString(),
         }).eq('order_id', o.order_id);
         stats.updated++;
         if (stageChanged && E.WON_SET.has(stage) && !E.WON_SET.has(Number(prev.last_stage_id)) && prev.fw_account_id) stats.customersPromoted += await promoteAccountCustomers(prev.fw_account_id);
