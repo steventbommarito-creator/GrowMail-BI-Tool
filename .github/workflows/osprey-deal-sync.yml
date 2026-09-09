@@ -18,6 +18,7 @@ concurrency:
 
 env:
   CI: 'true'
+  FRESHSALES_RATE: '20000'
   OSPREY_URL: ${{ secrets.OSPREY_URL }}
   OSPREY_USER: ${{ secrets.OSPREY_USER }}
   OSPREY_PASS: ${{ secrets.OSPREY_PASS }}
