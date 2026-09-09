@@ -15,6 +15,14 @@
  *   - duplicate SFDC leads under one email: most recently modified wins
  *   - staging pre-computes the exact payload from the view-listing snapshot, so
  *     drain is a single PUT per contact (no re-reads)
+ *
+ * The FW view scan runs ~3.5s/page (~3h for 2,950 pages), longer than any
+ * default job window — so load checkpoints its page into mapping_json and
+ * RESUMES from there if the runner dies; drain refuses to run until the scan
+ * has finished (staging_done), else it could drain a partial set to zero and
+ * mark the import complete, silently orphaning the unscanned contacts.
+ * A killed run can re-stage its last checkpoint interval; drain double-PUTs
+ * those harmlessly (same idempotent fill-empty payload).
  */
 const C = require('./common');
 const S = require('./sfdc');
@@ -33,7 +41,8 @@ const clean = (v, n) => { const s = String(v ?? '').trim(); return s ? s.slice(0
 const empty = (v) => !String(v ?? '').trim();
 
 async function load() {
-  if (await findImport(['pushing', 'complete'])) { console.log('lead-enrich already staged or complete.'); return; }
+  const prior = await findImport(['pushing', 'complete']);
+  if (prior && (prior.status === 'complete' || prior.mapping_json?.staging_done)) { console.log('lead-enrich already staged or complete.'); return; }
   console.log('Pulling SFDC Leads…');
   const leads = await S.queryAll(
     'SELECT Email, Company, Street, City, State, PostalCode, Country, Phone, MobilePhone, Title, LastModifiedDate FROM Lead WHERE Email != null',
@@ -47,17 +56,25 @@ async function load() {
   }
   console.log(`SFDC: ${leads.length} leads → ${byEmail.size} unique emails`);
 
-  const { data: imp } = await C.supabase.from('crm_imports').insert({
-    import_type: 'contacts_accounts', original_filename: 'Lead enrichment from SFDC Leads (company/address/phones)',
-    total_rows: 0, sheet_name: 'lead-enrich', status: 'pushing', uploaded_by: 'script:lead-enrich',
-    mapping_json: { __marker: MARKER },
-  }).select('id').single();
-
-  const stats = { scanned: 0, notLead: 0, noMatch: 0, nothingToAdd: 0, staged: 0 };
+  let imp = prior, stats;
+  if (imp) {                                        // resume a scan a dead runner left behind
+    stats = imp.mapping_json.stats || { scanned: 0, notLead: 0, noMatch: 0, nothingToAdd: 0, staged: 0 };
+    console.log(`Resuming scan at page ${imp.mapping_json.next_page} — ${JSON.stringify(stats)}`);
+  } else {
+    const { data } = await C.supabase.from('crm_imports').insert({
+      import_type: 'contacts_accounts', original_filename: 'Lead enrichment from SFDC Leads (company/address/phones)',
+      total_rows: 0, sheet_name: 'lead-enrich', status: 'pushing', uploaded_by: 'script:lead-enrich',
+      mapping_json: { __marker: MARKER, next_page: 1 },
+    }).select('id, mapping_json').single();
+    imp = data;
+    stats = { scanned: 0, notLead: 0, noMatch: 0, nothingToAdd: 0, staged: 0 };
+  }
   let batch = [];
   const flush = async () => { if (!batch.length) return; const { error } = await C.supabase.from('crm_import_rows').insert(batch.splice(0)); if (error) throw new Error(error.message); };
+  const checkpoint = (page, done) => C.supabase.from('crm_imports')
+    .update({ mapping_json: { __marker: MARKER, next_page: page, stats, staging_done: !!done } }).eq('id', imp.id);
 
-  for (let page = 1; ; page++) {
+  for (let page = Number(imp.mapping_json.next_page) || 1; ; page++) {
     const r = await C.fs('GET', `/contacts/view/${ALL_CONTACTS_VIEW}?per_page=100&page=${page}&sort=id&sort_type=asc&include=lifecycle_stage`);
     if (!r.ok) throw new Error(`view page ${page} failed: ${r.status}`);
     const contacts = r.data?.contacts || [];
@@ -88,12 +105,13 @@ async function load() {
         import_id: imp.id, row_index: ++stats.staged, status: 'pending',
         raw_json: { contact_id: c.id, email: em, payload },
       });
-      if (batch.length >= 500) await flush();
     }
-    if (page % 200 === 0) console.log(`  page ${page}: ${JSON.stringify(stats)}`);
+    await flush();                                  // page-aligned so the checkpoint never skips staged rows
+    await checkpoint(page + 1, false);
+    if (page % 100 === 0) console.log(`  page ${page}: ${JSON.stringify(stats)}`);
     if (contacts.length < 100) break;
   }
-  await flush();
+  await checkpoint(0, true);
   await C.supabase.from('crm_imports').update({ total_rows: stats.staged }).eq('id', imp.id);
   console.log(`Staged. ${JSON.stringify(stats)} IMPORT_ID=${imp.id}`);
 }
@@ -101,6 +119,7 @@ async function load() {
 async function drain() {
   const imp = await findImport(['pushing']);
   if (!imp) { console.log('lead-enrich: nothing staged.'); return; }
+  if (!imp.mapping_json?.staging_done) { console.log('lead-enrich: staging not finished — drain deferred.'); return; }
   const limit = argLimit();
   const started = Date.now();
   const MAX = Number(process.env.MAX_RUNTIME_MS || 0);

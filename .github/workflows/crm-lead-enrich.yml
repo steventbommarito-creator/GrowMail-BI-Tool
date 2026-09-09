@@ -1,8 +1,10 @@
 name: CRM Lead Enrichment (priority 4)
 
 # Enrich ~292k lead-contacts from the SFDC Lead table: cf_company + address +
-# phones + title, fill-empty-only. load stages once (guarded no-op after);
-# hourly drains resume until the staging is complete (~15-16h at 20k/hr).
+# phones + title, fill-empty-only. load stages with page checkpoints (~3h scan,
+# resumes if killed; no-op once staging_done); drains resume until complete
+# (~15-16h at 20k/hr). Long runs (350min) — the hourly cron just queues the
+# next run behind the live one (concurrency group holds one in the wings).
 # Delete this workflow once the job reports COMPLETE.
 
 on:
@@ -28,7 +30,7 @@ env:
 jobs:
   enrich:
     runs-on: ubuntu-latest
-    timeout-minutes: 58
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,4 +40,4 @@ jobs:
       - run: node crm-import/lead-enrich.js load
       - run: node crm-import/lead-enrich.js drain
         env:
-          MAX_RUNTIME_MS: '3000000'
+          MAX_RUNTIME_MS: '18000000'
