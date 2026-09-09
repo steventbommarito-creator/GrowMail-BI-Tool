@@ -38,6 +38,7 @@ async function buildOwnerByName() {
   if (!r.ok) throw new Error(`owners fetch failed: ${r.error}`);
   const byName = {};
   for (const u of r.data.users || []) {
+    if (u.is_active === false) continue;   // deactivated users can't own new deals (400 Owner is inactive)
     const nm = String(u.display_name || '').trim().toLowerCase();
     if (nm) byName[nm] = u.id;
   }
@@ -99,10 +100,13 @@ async function resolveAccount(name) {
 async function loadOrders() {
   // Latest snapshot ONLY — the table retains prior snapshots, and stale rows
   // would corrupt the per-drop aggregation the new staging depends on.
-  const { data: snap } = await C.supabase.from('osprey_mail_drops')
-    .select('snapshot_id').order('captured_at', { ascending: false }).limit(1);
-  const snapId = snap?.[0]?.snapshot_id;
-  if (!snapId) throw new Error('no osprey snapshot found');
+  // newest snapshot that actually contains a full report (partial scrapes
+  // create tiny snapshots because rows are upsert-restamped)
+  const { data: snaps } = await C.supabase.from('osprey_snapshots')
+    .select('id, row_count, captured_at').gte('row_count', Number(process.env.OSPREY_MIN_ROWS || 500))
+    .order('captured_at', { ascending: false }).limit(1);
+  const snapId = snaps?.[0]?.id;
+  if (!snapId) throw new Error('no full osprey snapshot found');
 
   const byOrder = new Map();
   let from = 0;
@@ -174,6 +178,12 @@ function mailDateFields(o) {
 // Merge this cycle's visible drops into the durable per-order log (the report
 // windows long series, so drops that scroll out of view must persist), then
 // render the deal's Drop Schedule textarea: one line per drop.
+// jsonb round-trips reorder object keys, so naive stringify always differs.
+function stableStringify(v) {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
+  return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stableStringify(v[k])).join(',') + '}';
+}
 function mergeDropLog(prevLog, visible) {
   const log = { ...(prevLog || {}) };
   for (const [dn, d] of Object.entries(visible || {})) {
@@ -315,7 +325,7 @@ async function main() {
       const expClose = expectedCloseFor(stage, o);
       const expChanged = String(prev.last_expected_close || '') !== String(expClose || '');
       const newLog = mergeDropLog(prev.drop_log, o.dropLog);
-      const logChanged = JSON.stringify(newLog) !== JSON.stringify(prev.drop_log || {});
+      const logChanged = stableStringify(newLog) !== stableStringify(prev.drop_log || {});
       if (!stageChanged && !amtChanged && !expChanged && !logChanged) { stats.unchanged++; continue; }
       if (dryRun) { stats.updated++; continue; }
       const upd = { deal_stage_id: stage, amount };
