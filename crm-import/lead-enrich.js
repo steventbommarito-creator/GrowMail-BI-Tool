@@ -127,28 +127,44 @@ async function drain() {
   let done = 0, pendingMarks = [];
   const flushMarks = async () => { if (pendingMarks.length) await Promise.all(pendingMarks.splice(0)); };
 
-  for (;;) {
+  // Serial PUTs cap out around 7k/hr (180ms rate gap + ~350ms FW latency per
+  // call). A slot pacer + worker pool keeps the exact FRESHSALES_RATE spacing
+  // between request STARTS while overlapping the latency → full 20k/hr.
+  const CONC = Number(process.env.DRAIN_CONCURRENCY || 8);
+  const INTERVAL = 3600000 / Number(process.env.FRESHSALES_RATE || 1900);
+  let slot = 0;
+  const paced = async () => { slot = Math.max(slot + INTERVAL, Date.now()); const w = slot - Date.now(); if (w > 0) await new Promise((r) => setTimeout(r, w)); };
+
+  outer: for (;;) {
     if (MAX && Date.now() - started >= MAX) { console.log('Runtime budget reached — exiting (resumable).'); break; }
     const { data: rows } = await C.supabase.from('crm_import_rows').select('id, raw_json')
       .eq('import_id', imp.id).eq('status', 'pending').order('row_index', { ascending: true }).limit(300);
     if (!rows || !rows.length) break;
-    for (const row of rows) {
-      const j = row.raw_json;
-      const r = await C.fs('PUT', `/contacts/${j.contact_id}`, { contact: j.payload });
-      const ok = r.ok || r.status === 404;                 // 404 = contact deleted in FW since staging
-      const msg = r.ok ? null : (r.status === 404 ? 'contact deleted in FW' : `PUT ${r.status}: ${String(r.error || '').slice(0, 120)}`);
-      if (ok) stats.sent++; else stats.failed++;
-      pendingMarks.push(C.supabase.from('crm_import_rows').update({
-        status: ok ? (r.ok ? 'sent' : 'skipped') : 'failed', error_message: msg,
-        fs_id: String(j.contact_id), attempted_at: new Date().toISOString(),
-      }).eq('id', row.id));
-      if (pendingMarks.length >= 50) await flushMarks();
-      done++;
-      if (done % 1000 === 0) console.log(`  ${done} — ${JSON.stringify(stats)}`);
-      if (limit && done >= limit) break;
-    }
+    let idx = 0;
+    const worker = async () => {
+      for (;;) {
+        if (MAX && Date.now() - started >= MAX) return;
+        if (limit && done >= limit) return;
+        const row = rows[idx++];
+        if (!row) return;
+        const j = row.raw_json;
+        await paced();
+        const r = await C.fs('PUT', `/contacts/${j.contact_id}`, { contact: j.payload });
+        const ok = r.ok || r.status === 404;               // 404 = contact deleted in FW since staging
+        const msg = r.ok ? null : (r.status === 404 ? 'contact deleted in FW' : `PUT ${r.status}: ${String(r.error || '').slice(0, 120)}`);
+        if (ok) stats.sent++; else stats.failed++;
+        pendingMarks.push(C.supabase.from('crm_import_rows').update({
+          status: ok ? (r.ok ? 'sent' : 'skipped') : 'failed', error_message: msg,
+          fs_id: String(j.contact_id), attempted_at: new Date().toISOString(),
+        }).eq('id', row.id));
+        if (pendingMarks.length >= 50) await flushMarks();
+        done++;
+        if (done % 1000 === 0) console.log(`  ${done} — ${JSON.stringify(stats)}`);
+      }
+    };
+    await Promise.all(Array.from({ length: CONC }, worker));
     await flushMarks();
-    if (limit && done >= limit) break;
+    if (limit && done >= limit) break outer;
   }
   await flushMarks();
   const { count: left } = await C.supabase.from('crm_import_rows').select('id', { count: 'exact', head: true }).eq('import_id', imp.id).eq('status', 'pending');
