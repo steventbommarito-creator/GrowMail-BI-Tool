@@ -137,8 +137,17 @@ async function drain() {
 
   outer: for (;;) {
     if (MAX && Date.now() - started >= MAX) { console.log('Runtime budget reached — exiting (resumable).'); break; }
-    const { data: rows } = await C.supabase.from('crm_import_rows').select('id, raw_json')
-      .eq('import_id', imp.id).eq('status', 'pending').order('row_index', { ascending: true }).limit(300);
+    // A swallowed fetch error here once made 3 cron runs "succeed" at 0 rows
+    // with 225k pending — never treat an errored fetch as an empty queue.
+    let rows = null;
+    for (let a = 0; a < 4; a++) {
+      const { data, error } = await C.supabase.from('crm_import_rows').select('id, raw_json')
+        .eq('import_id', imp.id).eq('status', 'pending').order('row_index', { ascending: true }).limit(300);
+      if (!error) { rows = data; break; }
+      console.log(`row fetch error (attempt ${a + 1}): ${error.message || JSON.stringify(error)}`);
+      if (a === 3) throw new Error(`row fetch failed 4x: ${error.message || JSON.stringify(error)}`);
+      await new Promise((r) => setTimeout(r, 5000 * (a + 1)));
+    }
     if (!rows || !rows.length) break;
     let idx = 0;
     const worker = async () => {
