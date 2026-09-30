@@ -20,7 +20,7 @@ export default function Nav() {
   const pathname = usePathname();
   // Don't render Nav (or create a Supabase client) on the login page —
   // having two GoTrueClient instances on the same page causes undefined behavior.
-  if (pathname === '/login') return null;
+  if (pathname === '/login' || pathname === '/intake') return null;
   const supabase = createClient();
   const { theme, setTheme } = useTheme();
   const [triggerStatus, setTriggerStatus] = useState({});   // idle | running | done | error
@@ -39,6 +39,7 @@ export default function Nav() {
     { href: '/hygiene', label: 'Data Hygiene' },
     { href: '/crm', label: 'CRM Integration' },
     { href: '/crm/sync', label: 'Sync Status' },
+    { href: '/quotes', label: 'Quotes' },
   ];
 
   // Load last sync times on mount

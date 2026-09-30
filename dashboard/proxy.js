@@ -31,8 +31,9 @@ export async function proxy(request) {
 
   const { pathname } = request.nextUrl;
 
-  // Allow login page and auth callback through
-  if (pathname.startsWith('/login') || pathname.startsWith('/auth')) {
+  // Allow login page, auth callback and the public quote intake form through
+  if (pathname.startsWith('/login') || pathname.startsWith('/auth')
+      || pathname === '/intake' || pathname === '/api/quotes/intake') {
     return supabaseResponse;
   }
 
