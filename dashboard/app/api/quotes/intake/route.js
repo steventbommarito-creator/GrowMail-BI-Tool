@@ -1,5 +1,6 @@
 // POST /api/quotes/intake
-// Public (no login — allowed through proxy.js). The /intake page uploads any
+// Public (no login — allowed through proxy.js); also used by the internal
+// /quotes/new page. The form uploads any
 // files straight to the quote-files bucket under intake/, then posts the form
 // here. We create the request via the submit_quote_request() RPC (the only
 // thing anon can do to the quote tables) and email the rep a confirmation.
@@ -74,6 +75,9 @@ export async function POST(request) {
   const { data, error } = await supabase.rpc('submit_quote_request', { p: payload });
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
   const code = data?.[0]?.quote_code;
+
+  // Internal /quotes/new can skip the rep email; public intake always sends.
+  if (p.notify === false) return NextResponse.json({ ok: true, quote_code: code, emailSent: false });
 
   let emailSent = true;
   try {

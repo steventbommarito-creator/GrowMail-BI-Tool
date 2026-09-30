@@ -4,6 +4,7 @@
 // for now this shows what's arrived through /intake.
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { createClient } from '../../lib/supabase';
 import { productLabel } from '../../lib/quoteSpecs';
 
@@ -39,10 +40,16 @@ export default function QuotesPage() {
     <div className="max-w-6xl mx-auto space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>Custom Quotes</h1>
-        <button onClick={copyLink} className="px-3 py-2 rounded-lg text-sm font-medium border"
-          style={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--text-primary)' }}>
-          {copied ? 'Copied!' : 'Copy intake form link'}
-        </button>
+        <div className="flex gap-2">
+          <button onClick={copyLink} className="px-3 py-2 rounded-lg text-sm font-medium border"
+            style={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--text-primary)' }}>
+            {copied ? 'Copied!' : 'Copy intake form link'}
+          </button>
+          <Link href="/quotes/new" className="px-3 py-2 rounded-lg text-sm font-semibold"
+            style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}>
+            + New quote
+          </Link>
+        </div>
       </div>
 
       {error && <p className="text-sm" style={{ color: 'var(--status-critical)' }}>{error}</p>}
