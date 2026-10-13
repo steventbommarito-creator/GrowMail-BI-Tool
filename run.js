@@ -69,9 +69,14 @@ async function main() {
     try {
       console.log('\n[USPS] Starting scrape...');
       const uspsPath = await scrapeUSPS();
-      console.log(`[USPS] Downloaded: ${uspsPath}`);
-      const result = await insertUSPS(uspsPath);
-      await logSync('usps', uspsStart, result);
+      if (uspsPath) {
+        console.log(`[USPS] Downloaded: ${uspsPath}`);
+        const result = await insertUSPS(uspsPath);
+        await logSync('usps', uspsStart, result);
+      } else {
+        console.log('[USPS] No transactions in the report — nothing to insert.');
+        await logSync('usps', uspsStart, { rowCount: 0, fileSizeBytes: 0 });
+      }
       console.log('[USPS] Done.');
     } catch (err) {
       console.error('[USPS] ERROR:', err.message);

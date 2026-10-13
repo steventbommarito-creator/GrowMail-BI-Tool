@@ -4,7 +4,8 @@ const os = require('os');
 
 /**
  * Logs into the USPS BCG portal, navigates to the EPS Transaction History Report,
- * downloads the CSV, and returns the local file path.
+ * downloads the CSV, and returns the local file path (null when the report
+ * has no transactions).
  *
  * Required environment variables:
  *   USPS_USER — BCG username
@@ -88,13 +89,30 @@ async function scrapeUSPS() {
     await page.getByRole('button', { name: 'Generate results' }).click();
     console.log('Generate results clicked');
 
-    // Wait for results table to appear
-    await page.waitForTimeout(3000);
+    // Step 7: Wait for the results grid. With no transactions in the report
+    // window (weekends, early mornings) the grid says "No Rows To Show" and the
+    // CSV button never produces a download — that's an empty result, not a
+    // failure. Give rows up to 15s to load before concluding it's empty, then
+    // return null so the caller logs a 0-row sync instead of the job going red.
+    let hasRows = false;
+    for (let i = 0; i < 15 && !hasRows; i++) {
+      await page.waitForTimeout(1000);
+      const text = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ');
+      hasRows = /\b[1-9]\d* to \d+ of \d+/.test(text);
+      if (!hasRows && i >= 4 && !/No Rows To Show/i.test(text)) hasRows = true;  // unknown layout — try the download
+    }
+    if (!hasRows) {
+      console.log('USPS report has no transactions (No Rows To Show)');
+      return null;
+    }
 
-    // Step 7: Download CSV
-    const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: 'CSV' }).click();
-    const download = await downloadPromise;
+    // Step 8: Download CSV. Start the download wait and the click together so a
+    // timeout rejects into this await (a dangling waitForEvent promise used to
+    // crash the whole process before the error could be logged).
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 60000 }),
+      page.getByRole('button', { name: 'CSV' }).click(),
+    ]);
 
     const filePath = path.join(os.tmpdir(), download.suggestedFilename() || 'usps_transactions.csv');
     await download.saveAs(filePath);
