@@ -121,7 +121,6 @@ export default function LateMailingsPage() {
     qty:         { min: '', max: '' },
     dropAmt:     { min: '', max: '' },
     postage:     { min: '', max: '' },
-    remaining:   { min: '', max: '' },
     balanceDue:  { min: '', max: '' },
     mailLocation:[],
   };
@@ -338,9 +337,6 @@ export default function LateMailingsPage() {
     const post = d.rawPostage || 0;
     if (filters.postage.min !== '' && post < Number(filters.postage.min)) return false;
     if (filters.postage.max !== '' && post > Number(filters.postage.max)) return false;
-    const rem = d.remainingBalance || 0;
-    if (filters.remaining.min !== '' && rem < Number(filters.remaining.min)) return false;
-    if (filters.remaining.max !== '' && rem > Number(filters.remaining.max)) return false;
     // Balance Due filter only matches rows whose live balance has loaded.
     if (filters.balanceDue.min !== '' || filters.balanceDue.max !== '') {
       if (d.balanceDue == null) return false;
@@ -365,7 +361,6 @@ export default function LateMailingsPage() {
       f.qty.min || f.qty.max ||
       f.dropAmt.min || f.dropAmt.max ||
       f.postage.min || f.postage.max ||
-      f.remaining.min || f.remaining.max ||
       f.balanceDue.min || f.balanceDue.max
     );
   }, [filters]);
@@ -580,7 +575,6 @@ export default function LateMailingsPage() {
       'Product': d.product_category || '',
       'Mail Method': d.mail_method || '',
       'Bill Via': d.billVia,
-      'Remaining Balance': (d.remainingBalance || 0).toFixed(2),
       'Balance Due (Osprey)': d.balanceDue == null ? '' : d.balanceDue.toFixed(2),
       'Quantity': d.mail_drop_quantity || 0,
       'Drop Amount': (d.mail_drop_amount || 0).toFixed(2),
@@ -921,7 +915,6 @@ export default function LateMailingsPage() {
                   { key: 'order_id',           label: 'Order ID',   align: 'left' },
                   { key: 'mail_drop_id',       label: 'Drop ID',    align: 'left' },
                   { key: 'billVia',            label: 'Bill Via',   align: 'left' },
-                  { key: 'remainingBalance',   label: 'Remaining',  align: 'right' },
                   { key: 'balanceDue',         label: 'Balance Due', align: 'right' },
                   { key: 'mail_drop_quantity', label: 'Qty',        align: 'right' },
                   { key: 'mail_drop_amount',   label: 'Drop Amt',   align: 'right' },
@@ -996,7 +989,7 @@ export default function LateMailingsPage() {
             <tbody>
               {sortedRowsWithRunning.length === 0 && (
                 <tr>
-                  <td colSpan={planningMode ? 17 : 16} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
+                  <td colSpan={planningMode ? 16 : 15} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
                     No late drops. 🎉
                   </td>
                 </tr>
@@ -1070,21 +1063,6 @@ export default function LateMailingsPage() {
                       }}>
                       {d.billVia}
                     </span>
-                  </td>
-                  {/* Remaining Balance — same logic as the Cashflow Billing
-                      Forecast: PrePay shows the order's unpaid balance (may
-                      repeat across multiple drops of the same order), terms
-                      show the full mail_drop_amount. */}
-                  <td className="px-3 py-1.5 text-right"
-                    style={{
-                      color: d.remainingBalance > 0 ? 'var(--text-primary)' : 'var(--text-muted)',
-                      fontWeight: d.remainingBalance > 0 ? 500 : 'normal',
-                      fontVariantNumeric: 'tabular-nums',
-                    }}
-                    title={d.billVia === 'PrePay'
-                      ? 'PrePay: unpaid portion of the parent order (max of 0, order_amount − payment_amount_applied). May repeat across multiple drops of the same order.'
-                      : `${d.billVia}: full drop amount — NetSuite hasn't invoiced this drop yet.`}>
-                    {fmt$(d.remainingBalance)}
                   </td>
                   {/* Balance Due — live from Osprey's order page (same number
                       as its "Balance Due" box). Spinner while loading. */}
@@ -1464,8 +1442,6 @@ function renderColumnFilter(key, filters, setFilter, choices) {
       return { width: 220, body: <RangeFilter value={filters.dropAmt} onChange={v => setFilter('dropAmt', v)} placeholderMin="Min $" placeholderMax="Max $" /> };
     case 'postageRequired':
       return { width: 220, body: <RangeFilter value={filters.postage} onChange={v => setFilter('postage', v)} placeholderMin="Min $" placeholderMax="Max $" /> };
-    case 'remainingBalance':
-      return { width: 220, body: <RangeFilter value={filters.remaining} onChange={v => setFilter('remaining', v)} placeholderMin="Min $" placeholderMax="Max $" /> };
     case 'balanceDue':
       return { width: 220, body: <RangeFilter value={filters.balanceDue} onChange={v => setFilter('balanceDue', v)} placeholderMin="Min $" placeholderMax="Max $" /> };
     default:
@@ -1484,7 +1460,6 @@ function isColumnFilterActive(key, f) {
     case 'mail_drop_quantity': return f.qty.min !== '' || f.qty.max !== '';
     case 'mail_drop_amount':   return f.dropAmt.min !== '' || f.dropAmt.max !== '';
     case 'postageRequired':    return f.postage.min !== '' || f.postage.max !== '';
-    case 'remainingBalance':   return f.remaining.min !== '' || f.remaining.max !== '';
     case 'balanceDue':         return f.balanceDue.min !== '' || f.balanceDue.max !== '';
     default:                   return false;
   }
