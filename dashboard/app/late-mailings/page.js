@@ -26,6 +26,7 @@ import {
 import { exportToCSV } from '../../lib/export';
 import { effectivePostage, isEstimatedPostage, isLdpMailMethod } from '../../lib/postage';
 import { OspreyOrderLink, OspreyDropLink } from '../../lib/ospreyLinks';
+import { HotJobButton, HotJobDialogs, saveHotJob, removeHotJob } from '../../components/HotJobs';
 
 const fmt$ = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtK = (n) => n == null ? '—' : '$' + (Math.abs(n) / 1000).toFixed(1) + 'k';
@@ -94,6 +95,8 @@ export default function LateMailingsPage() {
   const [epsDeductedMap, setEpsDeductedMap] = useState({});
   const [hotJobs, setHotJobs] = useState(new Map());         // mail_drop_id → { reason, set_by }
   const [hotTooltip, setHotTooltip] = useState(null);        // null | { dropId, x, y } — hover card
+  const [hotJobModal, setHotJobModal] = useState(null);      // null | { drop } — popup for setting reason
+  const [hotClearConfirm, setHotClearConfirm] = useState(null); // null | { drop } — confirm removal
   const [plannedDrops, setPlannedDrops] = useState(new Map()); // mail_drop_id → { planned_date, planned_by }
   const [loading, setLoading] = useState(true);
 
@@ -182,7 +185,7 @@ export default function LateMailingsPage() {
       }
     }
 
-    // Load currently-hot drops for read-only fire emoji display (with reason + set_by for tooltip)
+    // Load currently-hot drops for the fire toggle (with reason + set_by for tooltip)
     const { data: hotData } = await supabase
       .from('hot_jobs')
       .select('mail_drop_id, reason, set_by')
@@ -466,6 +469,16 @@ export default function LateMailingsPage() {
     }
     setFutureCutoffInput('');
   }, [futureCutoffInput, today, drops, futureDrops, customerTerms, supabase]);
+
+  // ── Hot Job toggle (same behavior as Cashflow) ─────────────────────────────
+  const setHotJob = async (drop, reason) => {
+    const info = await saveHotJob(supabase, drop, reason, userEmail);
+    if (info) setHotJobs(prev => { const m = new Map(prev); m.set(drop.mail_drop_id, info); return m; });
+  };
+
+  const clearHotJob = async (drop) => {
+    if (await removeHotJob(supabase, drop, userEmail)) setHotJobs(prev => { const m = new Map(prev); m.delete(drop.mail_drop_id); return m; });
+  };
 
   // ── Save Plan ────────────────────────────────────────────────────────────
   // Upserts planned_drops for every currently-checked row with the picked
@@ -968,14 +981,9 @@ export default function LateMailingsPage() {
                     </td>
                   )}
                   <td className="px-2 py-1.5 w-8 text-center">
-                    {hotJobs.has(d.mail_drop_id) && (
-                      <span
-                        onMouseEnter={e => setHotTooltip({ dropId: d.mail_drop_id, x: e.clientX, y: e.clientY })}
-                        onMouseMove={e => setHotTooltip(t => t ? { ...t, x: e.clientX, y: e.clientY } : null)}
-                        onMouseLeave={() => setHotTooltip(null)}
-                        style={{ fontSize: 14, lineHeight: 1, cursor: 'default', display: 'inline-block' }}
-                      >🔥</span>
-                    )}
+                    <HotJobButton drop={d} isHot={hotJobs.has(d.mail_drop_id)}
+                      onSet={drop => setHotJobModal({ drop })} onClear={drop => setHotClearConfirm({ drop })}
+                      setHotTooltip={setHotTooltip} />
                   </td>
                   <td className="px-3 py-1.5">
                     <span className="px-1.5 py-0.5 rounded text-[10px] font-medium"
@@ -1265,6 +1273,12 @@ export default function LateMailingsPage() {
           </div>
         </div>
       )}
+
+      {/* ── Hot Job reason modal + remove confirm ───────────────────────── */}
+      <HotJobDialogs
+        setModal={hotJobModal} onCloseSet={() => setHotJobModal(null)} onSave={setHotJob}
+        clearConfirm={hotClearConfirm} onCloseClear={() => setHotClearConfirm(null)} onRemove={clearHotJob}
+      />
 
       {/* ── Hot Job hover tooltip ─────────────────────────────────────────── */}
       {hotTooltip && (() => {
