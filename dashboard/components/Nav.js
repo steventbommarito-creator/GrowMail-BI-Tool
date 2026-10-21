@@ -35,6 +35,7 @@ export default function Nav() {
     { href: '/overview', label: 'Overview' },
     { href: '/forecast', label: 'Forecast' },
     { href: '/cashflow', label: 'Cashflow' },
+    { href: '/invoicing', label: 'Invoicing Report' },
     { href: '/actuals', label: 'Actuals' },
     { href: '/hygiene', label: 'Data Hygiene' },
     { href: '/crm', label: 'CRM Integration' },
