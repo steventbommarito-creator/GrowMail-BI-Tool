@@ -4,7 +4,8 @@
 // but PrePay), so they can be invoiced. LDP drops are included on purpose
 // (they're excluded elsewhere only because they don't hit our EPS).
 // A customer with no customer_terms row counts as PrePay and is left out.
-// Invoice number = order number-drop number.
+// Drop number = the Osprey mail ID (mail_drop_id, e.g. 27xxxx).
+// Invoice number = order number-mail ID.
 //
 // Each drop can be marked "Invoiced in QuickBooks" (qb_invoiced_drops, one row
 // per drop; unmarking flips is_invoiced off). Every mark/unmark is logged to
@@ -56,7 +57,7 @@ export default function InvoicingPage() {
         // drop_status casing is mixed: COMPLETE, complete, complete_tax_*.
         const drops = await fetchAll(() => supabase
           .from('osprey_mail_drops')
-          .select('customer_id, customer_name, order_id, mail_drop_id, drop_number, drop_act_date, mail_method')
+          .select('customer_id, customer_name, order_id, mail_drop_id, drop_act_date, mail_method')
           .ilike('drop_status', 'complete%')
           .order('mail_drop_id'));
 
@@ -77,7 +78,7 @@ export default function InvoicingPage() {
         setInvoiced(new Map(qb.map(q => [q.mail_drop_id, { invoiced_by: q.invoiced_by, invoiced_at: q.invoiced_at }])));
 
         setRows(drops
-          .map(d => ({ ...d, term: terms[d.customer_id] || 'PrePay', invoice: `${d.order_id}-${d.drop_number}` }))
+          .map(d => ({ ...d, term: terms[d.customer_id] || 'PrePay', invoice: `${d.order_id}-${d.mail_drop_id}` }))
           .filter(d => d.term !== 'PrePay')
           .sort((a, b) => (b.drop_act_date || '').localeCompare(a.drop_act_date || '') || a.invoice.localeCompare(b.invoice)));
       } catch (e) {
@@ -149,7 +150,7 @@ export default function InvoicingPage() {
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const lines = shown.map(r => {
       const q = invoiced.get(r.mail_drop_id);
-      return [r.customer_name?.trim(), r.term, r.order_id, r.drop_number, r.invoice, r.drop_act_date,
+      return [r.customer_name?.trim(), r.term, r.order_id, r.mail_drop_id, r.invoice, r.drop_act_date,
         q ? 'Yes' : 'No', q?.invoiced_by, q?.invoiced_at].map(esc).join(',');
     });
     const blob = new Blob([[header.map(esc).join(','), ...lines].join('\n')], { type: 'text/csv' });
@@ -229,7 +230,7 @@ export default function InvoicingPage() {
                   </td>
                   <td className="px-4 py-2 whitespace-nowrap">{r.term}</td>
                   <td className="px-4 py-2 whitespace-nowrap">{r.order_id}</td>
-                  <td className="px-4 py-2 whitespace-nowrap">{r.drop_number}</td>
+                  <td className="px-4 py-2 whitespace-nowrap">{r.mail_drop_id}</td>
                   <td className="px-4 py-2 font-semibold whitespace-nowrap">{r.invoice}</td>
                   <td className="px-4 py-2 whitespace-nowrap">{fmtDate(r.drop_act_date)}</td>
                   <td className="px-4 py-2 whitespace-nowrap">
