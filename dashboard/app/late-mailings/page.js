@@ -98,6 +98,9 @@ export default function LateMailingsPage() {
   const [hotJobModal, setHotJobModal] = useState(null);      // null | { drop } — popup for setting reason
   const [hotClearConfirm, setHotClearConfirm] = useState(null); // null | { drop } — confirm removal
   const [plannedDrops, setPlannedDrops] = useState(new Map()); // mail_drop_id → { planned_date, planned_by }
+  // Live Osprey Balance Due, keyed by order_id. Missing key = still loading
+  // (cell shows a spinner); null = lookup failed.
+  const [ospreyBalances, setOspreyBalances] = useState({});
   const [loading, setLoading] = useState(true);
 
   // ── Column filters ─────────────────────────────────────────────────────────
@@ -119,6 +122,7 @@ export default function LateMailingsPage() {
     dropAmt:     { min: '', max: '' },
     postage:     { min: '', max: '' },
     remaining:   { min: '', max: '' },
+    balanceDue:  { min: '', max: '' },
     mailLocation:[],
   };
   const [filters, setFilters] = useState(EMPTY_FILTERS);
@@ -215,6 +219,41 @@ export default function LateMailingsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Live Balance Due from Osprey for every order on the page (late + any
+  // future drops pulled into the plan). Fetched in chunks of 25, 3 chunks at
+  // a time, so cells fill in progressively instead of all at once. Orders
+  // already fetched (or in flight) are skipped when the drop list changes.
+  const requestedBalanceIds = useRef(new Set());
+  useEffect(() => {
+    const ids = [...new Set([...drops, ...futureDrops].map(d => d.order_id).filter(Boolean).map(String))]
+      .filter(id => !requestedBalanceIds.current.has(id));
+    if (!ids.length) return;
+    ids.forEach(id => requestedBalanceIds.current.add(id));
+    const chunks = [];
+    for (let i = 0; i < ids.length; i += 25) chunks.push(ids.slice(i, i + 25));
+    let next = 0;
+    const worker = async () => {
+      while (next < chunks.length) {
+        const chunk = chunks[next++];
+        let balances;
+        try {
+          const res = await fetch('/api/osprey/balances', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ orderIds: chunk }),
+          });
+          balances = res.ok ? (await res.json()).balances : null;
+        } catch { balances = null; }
+        setOspreyBalances(prev => {
+          const out = { ...prev };
+          for (const id of chunk) out[id] = balances?.[id] ?? null;
+          return out;
+        });
+      }
+    };
+    Promise.all([worker(), worker(), worker()]);
+  }, [drops, futureDrops]);
+
   // Enrich each drop with the fields the rest of the page needs:
   // billVia, daysLate (negative for future), postageRequired (post EPS-deduction),
   // epsCharged, isEst. Shared between lateDrops and futureDrops so both have the
@@ -236,8 +275,11 @@ export default function LateMailingsPage() {
     const remainingBalance = billVia === 'PrePay'
       ? Math.max(0, (d.order_amount || 0) - (d.payment_amount_applied || 0))
       : (d.mail_drop_amount || 0);
-    return { ...d, billVia, epsCharged, rawPostage, isEst, postageRequired, daysLate, remainingBalance };
-  }, [customerTerms, epsDeductedMap, today]);
+    // Osprey Balance Due — undefined while loading, null if the lookup failed.
+    const ob = d.order_id ? ospreyBalances[String(d.order_id)] : null;
+    const balanceDue = ob === undefined ? undefined : (ob ? ob.balance : null);
+    return { ...d, billVia, epsCharged, rawPostage, isEst, postageRequired, daysLate, remainingBalance, balanceDue };
+  }, [customerTerms, epsDeductedMap, ospreyBalances, today]);
 
   const lateDrops = useMemo(() => drops.map(enrichDrop), [drops, enrichDrop]);
   const enrichedFutureDrops = useMemo(() => futureDrops.map(enrichDrop).map(d => ({ ...d, _isFuture: true })), [futureDrops, enrichDrop]);
@@ -299,6 +341,12 @@ export default function LateMailingsPage() {
     const rem = d.remainingBalance || 0;
     if (filters.remaining.min !== '' && rem < Number(filters.remaining.min)) return false;
     if (filters.remaining.max !== '' && rem > Number(filters.remaining.max)) return false;
+    // Balance Due filter only matches rows whose live balance has loaded.
+    if (filters.balanceDue.min !== '' || filters.balanceDue.max !== '') {
+      if (d.balanceDue == null) return false;
+      if (filters.balanceDue.min !== '' && d.balanceDue < Number(filters.balanceDue.min)) return false;
+      if (filters.balanceDue.max !== '' && d.balanceDue > Number(filters.balanceDue.max)) return false;
+    }
     return true;
   }, [filters, plannedDrops]);
 
@@ -317,7 +365,8 @@ export default function LateMailingsPage() {
       f.qty.min || f.qty.max ||
       f.dropAmt.min || f.dropAmt.max ||
       f.postage.min || f.postage.max ||
-      f.remaining.min || f.remaining.max
+      f.remaining.min || f.remaining.max ||
+      f.balanceDue.min || f.balanceDue.max
     );
   }, [filters]);
 
@@ -532,6 +581,7 @@ export default function LateMailingsPage() {
       'Mail Method': d.mail_method || '',
       'Bill Via': d.billVia,
       'Remaining Balance': (d.remainingBalance || 0).toFixed(2),
+      'Balance Due (Osprey)': d.balanceDue == null ? '' : d.balanceDue.toFixed(2),
       'Quantity': d.mail_drop_quantity || 0,
       'Drop Amount': (d.mail_drop_amount || 0).toFixed(2),
       'Postage Required': d.postageRequired.toFixed(2),
@@ -872,6 +922,7 @@ export default function LateMailingsPage() {
                   { key: 'mail_drop_id',       label: 'Drop ID',    align: 'left' },
                   { key: 'billVia',            label: 'Bill Via',   align: 'left' },
                   { key: 'remainingBalance',   label: 'Remaining',  align: 'right' },
+                  { key: 'balanceDue',         label: 'Balance Due', align: 'right' },
                   { key: 'mail_drop_quantity', label: 'Qty',        align: 'right' },
                   { key: 'mail_drop_amount',   label: 'Drop Amt',   align: 'right' },
                   { key: 'postageRequired',    label: 'Postage',    align: 'right' },
@@ -945,7 +996,7 @@ export default function LateMailingsPage() {
             <tbody>
               {sortedRowsWithRunning.length === 0 && (
                 <tr>
-                  <td colSpan={planningMode ? 16 : 15} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
+                  <td colSpan={planningMode ? 17 : 16} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
                     No late drops. 🎉
                   </td>
                 </tr>
@@ -1034,6 +1085,20 @@ export default function LateMailingsPage() {
                       ? 'PrePay: unpaid portion of the parent order (max of 0, order_amount − payment_amount_applied). May repeat across multiple drops of the same order.'
                       : `${d.billVia}: full drop amount — NetSuite hasn't invoiced this drop yet.`}>
                     {fmt$(d.remainingBalance)}
+                  </td>
+                  {/* Balance Due — live from Osprey's order page (same number
+                      as its "Balance Due" box). Spinner while loading. */}
+                  <td className="px-3 py-1.5 text-right"
+                    style={{
+                      color: d.balanceDue > 0 ? 'var(--status-warn)' : 'var(--text-muted)',
+                      fontWeight: d.balanceDue > 0 ? 500 : 'normal',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                    title={d.balanceDue === null ? 'Could not load balance from Osprey' : 'Live Balance Due from Osprey'}>
+                    {!d.order_id ? '—'
+                      : d.balanceDue === undefined ? <Spinner />
+                      : d.balanceDue === null ? '?'
+                      : fmt$(d.balanceDue)}
                   </td>
                   <td className="px-3 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>
                     {d.mail_drop_quantity?.toLocaleString() || '—'}
@@ -1401,6 +1466,8 @@ function renderColumnFilter(key, filters, setFilter, choices) {
       return { width: 220, body: <RangeFilter value={filters.postage} onChange={v => setFilter('postage', v)} placeholderMin="Min $" placeholderMax="Max $" /> };
     case 'remainingBalance':
       return { width: 220, body: <RangeFilter value={filters.remaining} onChange={v => setFilter('remaining', v)} placeholderMin="Min $" placeholderMax="Max $" /> };
+    case 'balanceDue':
+      return { width: 220, body: <RangeFilter value={filters.balanceDue} onChange={v => setFilter('balanceDue', v)} placeholderMin="Min $" placeholderMax="Max $" /> };
     default:
       return null;
   }
@@ -1418,8 +1485,17 @@ function isColumnFilterActive(key, f) {
     case 'mail_drop_amount':   return f.dropAmt.min !== '' || f.dropAmt.max !== '';
     case 'postageRequired':    return f.postage.min !== '' || f.postage.max !== '';
     case 'remainingBalance':   return f.remaining.min !== '' || f.remaining.max !== '';
+    case 'balanceDue':         return f.balanceDue.min !== '' || f.balanceDue.max !== '';
     default:                   return false;
   }
+}
+
+// Small inline loading spinner for table cells.
+function Spinner() {
+  return (
+    <span className="inline-block animate-spin rounded-full align-middle"
+      style={{ width: 12, height: 12, border: '2px solid var(--border)', borderTopColor: 'var(--accent)' }} />
+  );
 }
 
 // ─── Column-filter primitives ────────────────────────────────────────────────
