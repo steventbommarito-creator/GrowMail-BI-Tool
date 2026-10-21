@@ -48,6 +48,9 @@ function addDays(d, n) {
 
 // Same active-order filter cashflow uses, lifted up so anyone reading the
 // page sees the exact set of statuses we treat as "still in flight".
+// How far ahead Planning Mode's "Add Future Days" picker can reach.
+const MAX_FUTURE_DAYS = 30;
+
 const ACTIVE_ORDER_STATUSES = [
   'DAL [SUBMITTED]', 'DIGITAL READY', 'DIGITAL [STAGING]',
   'OUTSOURCED', 'OUTSOURCED [STAGING]',
@@ -489,7 +492,7 @@ export default function LateMailingsPage() {
   // today through 5/30 in one batch (option "All drops scheduled up to that date").
   const addFutureDrops = useCallback(async () => {
     if (!futureCutoffInput) return;
-    const maxDate = addDays(today, 7);
+    const maxDate = addDays(today, MAX_FUTURE_DAYS);
     const cutoff = futureCutoffInput > maxDate ? maxDate : futureCutoffInput;
     const { data, error } = await supabase.from('osprey_mail_drops')
       .select('mail_drop_id, order_id, customer_id, customer_name, product_category, drop_est_date, drop_act_date, drop_status, order_status, is_live_status, postage_amount, actual_postage, mail_method, mail_drop_amount, mail_drop_quantity, payment_amount_applied, order_amount, web_id, mail_location')
@@ -856,7 +859,7 @@ export default function LateMailingsPage() {
                 type="date"
                 value={futureCutoffInput}
                 min={today}
-                max={addDays(today, 7)}
+                max={addDays(today, MAX_FUTURE_DAYS)}
                 onChange={e => setFutureCutoffInput(e.target.value)}
                 style={{
                   fontSize: 12, padding: '4px 8px', borderRadius: 6,
@@ -877,7 +880,7 @@ export default function LateMailingsPage() {
                 Save
               </button>
               <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                Adds every drop with est date from today through the picked date (max +7 days).
+                Adds every drop with est date from today through the picked date (max +{MAX_FUTURE_DAYS} days).
               </span>
               {enrichedFutureDrops.length > 0 && (
                 <button
