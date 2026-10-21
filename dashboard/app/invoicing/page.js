@@ -6,6 +6,8 @@
 // A customer with no customer_terms row counts as PrePay and is left out.
 // Drop number = the Osprey mail ID (mail_drop_id, e.g. 27xxxx).
 // Invoice number = order number-mail ID.
+// Only drops mailed on/after REPORT_START are listed; invoices before that
+// were auto-generated.
 //
 // Each drop can be marked "Invoiced in QuickBooks" (qb_invoiced_drops, one row
 // per drop; unmarking flips is_invoiced off). Every mark/unmark is logged to
@@ -20,6 +22,8 @@ const fmtDate = (d) => d
 const fmtStamp = (iso) => iso
   ? new Date(iso).toLocaleString('en-US', { timeZone: 'America/Detroit', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
   : '—';
+
+const REPORT_START = '2026-10-20';
 
 const VIEWS = [
   { key: 'open', label: 'To invoice' },
@@ -59,6 +63,7 @@ export default function InvoicingPage() {
           .from('osprey_mail_drops')
           .select('customer_id, customer_name, order_id, mail_drop_id, drop_act_date, mail_method')
           .ilike('drop_status', 'complete%')
+          .gte('drop_act_date', REPORT_START)
           .order('mail_drop_id'));
 
         const ids = [...new Set(drops.map(d => d.customer_id).filter(Boolean))];
@@ -170,7 +175,7 @@ export default function InvoicingPage() {
         <div>
           <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>Invoicing Report</h1>
           <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            Completed drops for clients on terms (not PrePay), including LDP.
+            Completed drops for clients on terms (not PrePay), including LDP, mailed on or after {fmtDate(REPORT_START)}.
           </p>
         </div>
         <div className="flex gap-2 flex-wrap items-center text-sm">
