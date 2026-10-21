@@ -529,7 +529,7 @@ export default function CashflowPage() {
     for (const d of allDrops) {
       const dateKey = d._pastDue ? 'past-due' : (d.drop_est_date || 'unknown');
       if (!dayMap[dateKey]) dayMap[dateKey] = [];
-      const term = customerTerms[d.customer_id] || 'Other';
+      const term = customerTerms[d.customer_id] || 'PrePay';   // no terms on file (new client) -> PrePay
       const postage = effectivePostage(d);
       const amtDue = Math.max(0, (d.order_amount || 0) - (d.payment_amount_applied || 0));
       dayMap[dateKey].push({ ...d, _term: term, _postage: postage, _amtDue: amtDue });

@@ -63,11 +63,12 @@ const AGING_BUCKETS = [
 ];
 
 // Map a customer_terms.term_label into one of our four buckets. We treat
-// anything outside PrePay/NET30/NET45 (including null) as "Other" so the
-// breakdown adds up to 100% no matter what's in the table.
+// missing terms (no row / Undefined — e.g. a first-time client) as PrePay, and
+// anything else outside PrePay/NET30/NET45 as "Other" so the breakdown adds up
+// to 100% no matter what's in the table.
 function classifyTerm(label) {
   const t = (label || '').toUpperCase().trim();
-  if (t === 'PREPAY') return 'PrePay';
+  if (t === 'PREPAY' || t === '' || t === 'UNDEFINED') return 'PrePay';
   if (t === 'NET30')  return 'NET30';
   if (t === 'NET45')  return 'NET45';
   return 'Other';
