@@ -15,6 +15,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '../../lib/supabase';
+import { OspreyOrderLink } from '../../lib/ospreyLinks';
 
 const fmtDate = (d) => d
   ? new Date(`${d}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -234,7 +235,7 @@ export default function InvoicingPage() {
                     )}
                   </td>
                   <td className="px-4 py-2 whitespace-nowrap">{r.term}</td>
-                  <td className="px-4 py-2 whitespace-nowrap">{r.order_id}</td>
+                  <td className="px-4 py-2 whitespace-nowrap"><OspreyOrderLink id={r.order_id} /></td>
                   <td className="px-4 py-2 whitespace-nowrap">{r.mail_drop_id}</td>
                   <td className="px-4 py-2 font-semibold whitespace-nowrap">{r.invoice}</td>
                   <td className="px-4 py-2 whitespace-nowrap">{fmtDate(r.drop_act_date)}</td>

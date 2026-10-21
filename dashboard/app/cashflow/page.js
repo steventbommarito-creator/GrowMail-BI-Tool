@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import { exportToCSV, exportToPDF } from '../../lib/export';
 import { effectivePostage, isEstimatedPostage, isLdpMailMethod } from '../../lib/postage';
-import { OspreyDropLink } from '../../lib/ospreyLinks';
+import { OspreyOrderLink, OspreyDropLink } from '../../lib/ospreyLinks';
 import { HotJobButton, HotJobDialogs, saveHotJob, removeHotJob } from '../../components/HotJobs';
 
 const fmt$ = (n) => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -116,6 +116,7 @@ export default function CashflowPage() {
   const [customerTerms, setCustomerTerms] = useState({}); // customer_id → term_label
   const [expandedBillingRows, setExpandedBillingRows] = useState({});
   const [epsDeductedMap, setEpsDeductedMap] = useState({}); // mail_drop_id → transaction_number (already charged to EPS)
+  const [txnOrderMap, setTxnOrderMap] = useState({});       // mail_drop_id → order_id for EPS transaction rows
   const [activeDrawer, setActiveDrawer] = useState(null);   // null | 'balance' | 'postage' | 'pastdue' | 'deposits' — KPI drilldown drawer
   const [hotJobs, setHotJobs] = useState(new Map());         // mail_drop_id → { reason, set_by, set_at }
   const [hotJobModal, setHotJobModal] = useState(null);      // null | { drop } — popup for setting reason
@@ -170,6 +171,16 @@ export default function CashflowPage() {
       }
     }
 
+    // Order numbers for the drops EPS transactions point at. Most matched drops
+    // have already mailed, so they aren't in the live dropData above.
+    const txnOrders = {};
+    const txnDropIds = Object.keys(epsMap);
+    for (let i = 0; i < txnDropIds.length; i += 200) {
+      const { data: od } = await supabase.from('osprey_mail_drops')
+        .select('mail_drop_id, order_id').in('mail_drop_id', txnDropIds.slice(i, i + 200));
+      for (const o of (od || [])) txnOrders[o.mail_drop_id] = o.order_id;
+    }
+
     // Drop anything with mail_method = "LDP" — those are handled by LDP and
     // don't hit our EPS, so they shouldn't appear anywhere in cashflow views.
     const dropsWithoutLdp = [...seenDrops.values()].filter(d => !isLdpMailMethod(d));
@@ -195,6 +206,7 @@ export default function CashflowPage() {
     setProjectedDebits(debitData || []);
     setCustomerTerms(termsMap);
     setEpsDeductedMap(epsMap);
+    setTxnOrderMap(txnOrders);
     setHotJobs(hotMap);
     setPlannedDrops(plannedMap);
     setLoading(false);
@@ -1012,7 +1024,7 @@ export default function CashflowPage() {
                             <thead style={{ background: 'var(--surface)' }}>
                               <tr>
                                 <th className="px-2 py-1.5" style={{ minWidth: 44 }} />
-                                {['Customer', 'Product', 'Drop ID', 'Status', r.isLateMail ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag', 'Mail Location'].filter(Boolean).map(h => (
+                                {['Customer', 'Product', 'Order ID', 'Drop ID', 'Status', r.isLateMail ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag', 'Mail Location'].filter(Boolean).map(h => (
                                   <th key={h} className="text-left px-3 py-1.5 font-medium" style={{ color: 'var(--text-muted)' }}>{h}</th>
                                 ))}
                               </tr>
@@ -1041,6 +1053,7 @@ export default function CashflowPage() {
                                   </td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
+                                  <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}><OspreyOrderLink id={d.order_id} /></td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}><OspreyDropLink id={d.mail_drop_id} /></td>
                                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.drop_status || '—'}</td>
                                   {r.isLateMail && (
@@ -1262,7 +1275,7 @@ export default function CashflowPage() {
                                     <thead style={{ background: 'var(--surface2)' }}>
                                       <tr>
                                         <th className="px-2 py-1.5" style={{ minWidth: 44 }} />
-                                        {['Customer', 'Product', 'Drop ID', 'Status', dayKey === 'past-due' ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag', 'Mail Location'].filter(Boolean).map(h => (
+                                        {['Customer', 'Product', 'Order ID', 'Drop ID', 'Status', dayKey === 'past-due' ? 'Sched. Date' : null, 'Postage', 'Pieces', 'Flag', 'Mail Location'].filter(Boolean).map(h => (
                                           <th key={h} className="text-left px-3 py-1.5 font-medium"
                                             style={{ color: 'var(--text-muted)' }}>{h}</th>
                                         ))}
@@ -1292,6 +1305,7 @@ export default function CashflowPage() {
                                           </td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
+                                          <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}><OspreyOrderLink id={d.order_id} /></td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}><OspreyDropLink id={d.mail_drop_id} /></td>
                                           <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.drop_status || '—'}</td>
                                           {dayKey === 'past-due' && (
@@ -1475,7 +1489,7 @@ export default function CashflowPage() {
                                   }}>
                                     <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                                     <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.web_id || '—'}</td>
-                                    <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{d.order_id || '—'}</td>
+                                    <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}><OspreyOrderLink id={d.order_id} /></td>
                                     <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}><OspreyDropLink id={d.mail_drop_id} /></td>
                                     <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
                                     <td className="px-3 py-1.5">
@@ -1554,7 +1568,7 @@ export default function CashflowPage() {
           <table className="w-full text-xs">
             <thead style={{ background: 'var(--surface2)' }}>
               <tr>
-                {['Date (ET)', 'Type', 'Amount', 'Balance', 'Job ID', 'Bucket', 'Match'].map(h => (
+                {['Date (ET)', 'Type', 'Amount', 'Balance', 'Job ID', 'Bucket', 'Order ID', 'Match'].map(h => (
                   <th key={h} className="text-left px-3 py-2 font-medium" style={{ color: 'var(--text-muted)' }}>{h}</th>
                 ))}
               </tr>
@@ -1589,6 +1603,9 @@ export default function CashflowPage() {
                       }}>
                       {t.transaction_bucket?.toUpperCase() || 'UNKNOWN'}
                     </span>
+                  </td>
+                  <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>
+                    {txnOrderMap[t.osprey_mail_drop_id] ? <OspreyOrderLink id={txnOrderMap[t.osprey_mail_drop_id]} /> : '—'}
                   </td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>
                     {t.osprey_mail_drop_id ? <OspreyDropLink id={t.osprey_mail_drop_id} /> : (t.is_dmm ? 'DMM' : '—')}
@@ -1639,6 +1656,7 @@ export default function CashflowPage() {
                       <th className="text-left py-1.5">Bucket</th>
                       <th className="text-right py-1.5">Amount</th>
                       <th className="text-right py-1.5">Balance</th>
+                      <th className="text-left py-1.5 pl-2">Order</th>
                       <th className="text-left py-1.5 pl-2">Drop</th>
                     </tr>
                   </thead>
@@ -1663,6 +1681,9 @@ export default function CashflowPage() {
                           {fmt$(t.amount)}
                         </td>
                         <td className="text-right py-1.5 font-medium" style={{ color: 'var(--text-primary)' }}>{fmt$(t.ending_balance)}</td>
+                        <td className="py-1.5 pl-2" style={{ color: 'var(--text-muted)' }}>
+                          {txnOrderMap[t.osprey_mail_drop_id] ? <OspreyOrderLink id={txnOrderMap[t.osprey_mail_drop_id]} /> : '—'}
+                        </td>
                         <td className="py-1.5 pl-2" style={{ color: 'var(--text-muted)' }}>
                           {t.osprey_mail_drop_id ? <OspreyDropLink id={t.osprey_mail_drop_id} /> : (t.is_dmm ? 'DMM' : '—')}
                         </td>
