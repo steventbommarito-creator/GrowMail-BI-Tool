@@ -51,10 +51,7 @@ jobs:
           while [ $SECONDS -lt $end ]; do
             t0=$SECONDS
             node run.js || echo "scrape failed (iteration $i) — continuing"
-            node crm-import/osprey-deal-sync.js || echo "deal-sync failed (iteration $i) — continuing"
-            if [ $((i % 3)) -eq 0 ]; then
-              node crm-import/osprey-lead-sync.js || echo "lead-sync failed (iteration $i) — continuing"
-            fi
+            # Freshworks deal/lead sync turned off 2026-11-04 (scrape continues).
             i=$((i+1))
             el=$((SECONDS-t0))
             if [ $el -lt 180 ]; then sleep $((180-el)); fi

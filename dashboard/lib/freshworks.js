@@ -72,6 +72,11 @@ function headersFor(apiKey) {
  * what to log without try/catch noise.
  */
 async function call(supabase, method, path, body) {
+  // Freshsales writes are turned off (2026-11-04). Reads still work; set
+  // FRESHSALES_WRITES_ENABLED=true to re-enable creates/updates/deletes.
+  if (method.toUpperCase() !== 'GET' && process.env.FRESHSALES_WRITES_ENABLED !== 'true') {
+    return { ok: false, status: 0, error: `Freshsales writes disabled (${method} ${path})` };
+  }
   let settings;
   try { settings = await loadSettings(supabase); }
   catch (e) { return { ok: false, status: 0, error: e.message, code: e.code }; }

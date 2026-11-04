@@ -25,6 +25,11 @@ let _lastReq = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function fs(method, path, body, retries = 5) {
+  // Freshsales writes are turned off (2026-11-04). Reads still work; set
+  // FRESHSALES_WRITES_ENABLED=true to re-enable creates/updates/deletes.
+  if (method.toUpperCase() !== 'GET' && process.env.FRESHSALES_WRITES_ENABLED !== 'true') {
+    return { ok: false, status: 0, error: `Freshsales writes disabled (${method} ${path})` };
+  }
   const wait = _lastReq + MIN_INTERVAL_MS - Date.now();
   if (wait > 0) await sleep(wait);
   const url = FS_BASE + path;

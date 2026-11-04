@@ -11,8 +11,7 @@ name: CRM Repair Chain (1, 1.5, 2, 3)
 # Delete this file when all four report complete.
 
 on:
-  schedule:
-    - cron: '25 * * * *'
+  # Freshsales writes turned off 2026-11-04 — schedule removed.
   workflow_dispatch:
 
 concurrency:
