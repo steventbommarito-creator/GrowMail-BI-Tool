@@ -2,7 +2,7 @@ name: Industry Tags Drain
 
 # Adds "<Industry> - 30 Day Untouched" tags to FW contacts staged by
 # `node crm-import/industry-tags.js build` (Dental, Church or Ministry), paced
-# under the 2000/hr cap. Resumable: each run drains ~50 min then exits; the next
+# well under the FW cap (27,000/hr + 1,350/min as of 2026-11-05). Resumable: each run drains ~50 min then exits; the next
 # run continues. GitHub drops many hourly cron slots, so a run that ends with
 # rows left re-dispatches itself; the cron is only a backstop. Exits immediately
 # once everything is tagged — remove the schedule after that. Freshsales writes are enabled for this job ONLY (tags).
@@ -36,6 +36,8 @@ jobs:
         env:
           CI: 'true'
           MAX_RUNTIME_MS: '3000000'
+          FRESHSALES_RATE: '20000'
+          TAG_WORKERS: '5'
           FRESHSALES_WRITES_ENABLED: 'true'
           FRESHSALES_DOMAIN: ${{ secrets.FRESHSALES_DOMAIN }}
           FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}

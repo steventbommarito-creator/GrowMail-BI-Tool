@@ -26,6 +26,7 @@ const INDUSTRIES = ['Dental', 'Church or Ministry'];
 const tagFor = (ind) => `${ind} - 30 Day Untouched`;
 const WINBACK_TAGS = ['Lapsed Nov-Dec 2025', 'Rep Left', 'No Current Rep'];
 const MARKER = 'industry-tags-2026-11';
+const WORKERS = Number(process.env.TAG_WORKERS || 5);
 const FREEMAIL = new Set(['gmail.com', 'yahoo.com', 'hotmail.com', 'aol.com', 'outlook.com', 'icloud.com', 'comcast.net', 'msn.com', 'live.com', 'att.net', 'verizon.net', 'me.com', 'sbcglobal.net', 'bellsouth.net', 'ymail.com', 'cox.net', 'charter.net']);
 const domain = (e) => String(e || '').toLowerCase().split('@')[1] || '';
 
@@ -127,13 +128,13 @@ async function tag() {
       console.log('All rows done — import marked complete.');
       break;
     }
-    for (const row of rows) {
-      if (MAX && Date.now() - started >= MAX) break;
+    // WORKERS contacts at a time; C.fs still paces total requests to FRESHSALES_RATE.
+    const one = async (row) => {
       const set = (status, error_message = null) => C.supabase.from('crm_import_rows')
         .update({ status, error_message, attempted_at: new Date().toISOString() }).eq('id', row.id);
       const t = row.raw_json.tag;
       const g = await C.fs('GET', `/contacts/${row.fs_id}`);
-      if (!g.ok) { stats.notFound++; await set('failed', `GET ${g.status}`); continue; }
+      if (!g.ok) { stats.notFound++; await set('failed', `GET ${g.status}`); return; }
       const tags = g.data.contact.tags || [];
       if (tags.includes(t)) { stats.already++; await set('sent'); }
       else if (tags.some((x) => WINBACK_TAGS.includes(x))) { stats.winback++; await set('skipped', 'in win-back push'); }
@@ -143,6 +144,10 @@ async function tag() {
         else { stats.failed++; await set('failed', `PUT ${r.status} ${r.error}`); }
       }
       if (++n % 250 === 0) console.log(`  ${n} ${JSON.stringify(stats)}`);
+    };
+    for (let i = 0; i < rows.length; i += WORKERS) {
+      if (MAX && Date.now() - started >= MAX) break;
+      await Promise.all(rows.slice(i, i + WORKERS).map(one));
     }
   }
   console.log(JSON.stringify(stats));

@@ -17,7 +17,8 @@ const supabase = require('../lib/supabase');
 const FS_DOMAIN = String(process.env.FRESHSALES_DOMAIN || '').replace(/^https?:\/\//, '').split('/')[0];
 const FS_KEY = process.env.FRESHSALES_API_KEY;
 const FS_BASE = `https://${FS_DOMAIN}/crm/sales/api`;
-// Account cap is 2000 req/hr + 400/min. Default to 1900/hr for safety margin.
+// Account cap was 2000 req/hr + 400/min (2026-07); now 27,000/hr + 1,350/min
+// (2026-11-05). Default stays 1900/hr; jobs can raise FRESHSALES_RATE.
 const RATE_PER_HOUR = Number(process.env.FRESHSALES_RATE || 1900);
 const MIN_INTERVAL_MS = 3600000 / RATE_PER_HOUR;
 let _lastReq = 0;
@@ -30,11 +31,13 @@ async function fs(method, path, body, retries = 5) {
   if (method.toUpperCase() !== 'GET' && process.env.FRESHSALES_WRITES_ENABLED !== 'true') {
     return { ok: false, status: 0, error: `Freshsales writes disabled (${method} ${path})` };
   }
-  const wait = _lastReq + MIN_INTERVAL_MS - Date.now();
-  if (wait > 0) await sleep(wait);
   const url = FS_BASE + path;
   for (let attempt = 0; attempt < retries; attempt++) {
-    _lastReq = Date.now();
+    // Reserve the next slot before sleeping, so concurrent callers queue up
+    // MIN_INTERVAL_MS apart instead of all firing after the same wait.
+    const slot = Math.max(Date.now(), _lastReq + MIN_INTERVAL_MS);
+    _lastReq = slot;
+    if (slot > Date.now()) await sleep(slot - Date.now());
     let res;
     try {
       res = await fetch(url, {
