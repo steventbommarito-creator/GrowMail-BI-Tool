@@ -3,13 +3,18 @@ name: Industry Tags Drain
 # Adds "<Industry> - 30 Day Untouched" tags to FW contacts staged by
 # `node crm-import/industry-tags.js build` (Dental, Church or Ministry), paced
 # under the 2000/hr cap. Resumable: each run drains ~50 min then exits; the next
-# hourly run continues. Exits immediately once everything is tagged — remove the
-# schedule after that. Freshsales writes are enabled for this job ONLY (tags).
+# run continues. GitHub drops many hourly cron slots, so a run that ends with
+# rows left re-dispatches itself; the cron is only a backstop. Exits immediately
+# once everything is tagged — remove the schedule after that. Freshsales writes are enabled for this job ONLY (tags).
 
 on:
   schedule:
     - cron: '5 * * * *'
   workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
 
 concurrency:
   group: industry-tags
@@ -25,7 +30,9 @@ jobs:
         with:
           node-version: '20'
       - run: npm install
-      - run: node crm-import/industry-tags.js tag
+      - id: drain
+        shell: bash   # explicit bash = pipefail, so a crash under tee still fails the step
+        run: node crm-import/industry-tags.js tag | tee drain.log
         env:
           CI: 'true'
           MAX_RUNTIME_MS: '3000000'
@@ -34,3 +41,8 @@ jobs:
           FRESHSALES_API_KEY: ${{ secrets.FRESHSALES_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      - name: Chain the next run if rows remain
+        if: success()
+        run: grep -q 'Runtime budget reached' drain.log && gh workflow run industry-tags.yml --ref main || echo 'No rows left — not chaining.'
+        env:
+          GH_TOKEN: ${{ github.token }}
