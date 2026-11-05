@@ -8,8 +8,7 @@ name: Industry Tags Drain
 # once everything is tagged — remove the schedule after that. Freshsales writes are enabled for this job ONLY (tags).
 
 on:
-  schedule:
-    - cron: '5 * * * *'
+  # Finished 2026-11-05 (12,429 tagged) — schedule removed; dispatch for a new staged batch.
   workflow_dispatch:
 
 permissions:
