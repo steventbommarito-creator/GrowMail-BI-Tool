@@ -34,7 +34,7 @@ env:
 
 jobs:
   repair:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # Playwright 1.59 can't install chromium on ubuntu-latest (26.04)
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
