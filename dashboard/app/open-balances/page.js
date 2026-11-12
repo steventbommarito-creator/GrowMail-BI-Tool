@@ -4,7 +4,10 @@
 // whose live Osprey Balance Due is more than zero. The balance is the same
 // number as the "Balance Due" box on the Osprey order page and the orange
 // Balance Due column on Late Mailings (/api/osprey/balances), looked up per
-// order in chunks so rows fill in progressively.
+// order in chunks so rows fill in progressively. Orders Supabase already shows
+// as unpaid are checked first, so nearly every row appears within the first few
+// chunks; the rest (mostly paid in full) finish in the background. The table
+// shows PAGE_SIZE rows per page.
 //
 // Terms come from customer_terms.term_label; a customer with no row (or
 // "Undefined") shows as Unknown. "All drops complete" ignores canceled /
@@ -19,6 +22,7 @@ const fmtDate = (d) => d
   ? new Date(`${d}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   : '—';
 
+const PAGE_SIZE = 50;
 const EXCLUDED_ORDER_STATUSES = ['QUOTE', 'INCOMPLETE', 'CANCELED', 'VOID'];
 const isComplete = (d) => /^complete/i.test(d.drop_status || '') || !!d.drop_act_date;
 const isCanceled = (d) => /^(canceled|discard)$/i.test(d.drop_status || '');
@@ -57,13 +61,14 @@ export default function OpenBalancesPage() {
   const [completeView, setCompleteView] = useState('all');
   const [minBalance, setMinBalance] = useState('');
   const [sort, setSort] = useState({ key: 'balance', dir: -1 });
+  const [page, setPage] = useState(0);
 
   useEffect(() => {
     (async () => {
       try {
         const drops = await fetchAll(() => supabase
           .from('osprey_mail_drops')
-          .select('customer_id, customer_name, order_id, order_status, order_amount, seller, mail_drop_id, drop_status, drop_est_date, drop_act_date')
+          .select('customer_id, customer_name, order_id, order_status, order_amount, payment_amount_applied, seller, mail_drop_id, drop_status, drop_est_date, drop_act_date')
           .not('order_status', 'in', `(${EXCLUDED_ORDER_STATUSES.join(',')})`)
           .order('mail_drop_id'));
 
@@ -83,7 +88,7 @@ export default function OpenBalancesPage() {
           if (!o) {
             o = {
               order_id: String(d.order_id), customer_name: (d.customer_name || '').trim(), order_status: d.order_status,
-              order_amount: Number(d.order_amount) || 0, seller: d.seller, term: termLabel(termByCustomer[d.customer_id]),
+              order_amount: Number(d.order_amount) || 0, paidAtScrape: Number(d.payment_amount_applied) || 0, seller: d.seller, term: termLabel(termByCustomer[d.customer_id]),
               drops: 0, dropsComplete: 0, lastDrop: null,
             };
             byOrder.set(d.order_id, o);
@@ -97,8 +102,10 @@ export default function OpenBalancesPage() {
         const list = [...byOrder.values()].map(o => ({ ...o, allComplete: o.drops > 0 && o.dropsComplete === o.drops }));
         setOrders(list);
 
-        // Live Balance Due per order: chunks of 50, 3 chunks at a time.
-        const orderIds = list.map(o => o.order_id);
+        // Live Balance Due per order: chunks of 50, 3 chunks at a time, orders
+        // that looked unpaid at the last scrape first.
+        const likelyOwing = (o) => o.order_amount - o.paidAtScrape > 0.005;
+        const orderIds = [...list].sort((a, b) => likelyOwing(b) - likelyOwing(a)).map(o => o.order_id);
         const chunks = [];
         for (let i = 0; i < orderIds.length; i += 50) chunks.push(orderIds.slice(i, i + 50));
         let next = 0;
@@ -169,6 +176,12 @@ export default function OpenBalancesPage() {
 
   const total = useMemo(() => shown.reduce((s, o) => s + o.balance, 0), [shown]);
 
+  // Back to the first page whenever the filters or sort change.
+  useEffect(() => { setPage(0); }, [search, terms, completeView, minBalance, sort]);
+  const pageCount = Math.max(1, Math.ceil(shown.length / PAGE_SIZE));
+  const pageIndex = Math.min(page, pageCount - 1);
+  const pageRows = useMemo(() => shown.slice(pageIndex * PAGE_SIZE, (pageIndex + 1) * PAGE_SIZE), [shown, pageIndex]);
+
   const toggleTerm = (t) => setTerms(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
   const sortBy = (key) => setSort(prev => ({ key, dir: prev.key === key ? -prev.dir : (['balance', 'order_amount', 'paid', 'lastDrop'].includes(key) ? -1 : 1) }));
 
@@ -229,7 +242,7 @@ export default function OpenBalancesPage() {
       {(orders === null && !error) && <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading orders…</p>}
       {loading && (
         <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-          Checking balances in Osprey: {checked.toLocaleString()} of {orders.length.toLocaleString()} orders. Rows appear as they load.
+          Checking balances in Osprey: {checked.toLocaleString()} of {orders.length.toLocaleString()} orders. Orders most likely to owe are checked first.
         </p>
       )}
       {!loading && failed > 0 && (
@@ -277,7 +290,7 @@ export default function OpenBalancesPage() {
             {orders !== null && !loading && shown.length === 0 && (
               <tr><td colSpan={headers.length} className="px-4 py-6" style={{ color: 'var(--text-muted)' }}>No orders with an open balance match these filters.</td></tr>
             )}
-            {shown.map(o => (
+            {pageRows.map(o => (
               <tr key={o.order_id} className="border-t" style={{ borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
                 <td className="px-4 py-2">{o.customer_name}</td>
                 <td className="px-4 py-2 whitespace-nowrap">{o.term}</td>
@@ -300,6 +313,25 @@ export default function OpenBalancesPage() {
           </tbody>
         </table>
       </div>
+
+      {shown.length > PAGE_SIZE && (
+        <div className="flex items-center justify-between text-sm" style={{ color: 'var(--text-secondary)' }}>
+          <span>
+            Showing {(pageIndex * PAGE_SIZE + 1).toLocaleString()}–{Math.min((pageIndex + 1) * PAGE_SIZE, shown.length).toLocaleString()} of {shown.length.toLocaleString()}
+          </span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setPage(pageIndex - 1)} disabled={pageIndex === 0}
+              className="px-3 py-1.5 rounded-lg font-medium border" style={{ ...chip(false), opacity: pageIndex === 0 ? 0.5 : 1 }}>
+              Previous
+            </button>
+            <span>Page {pageIndex + 1} of {pageCount}</span>
+            <button onClick={() => setPage(pageIndex + 1)} disabled={pageIndex >= pageCount - 1}
+              className="px-3 py-1.5 rounded-lg font-medium border" style={{ ...chip(false), opacity: pageIndex >= pageCount - 1 ? 0.5 : 1 }}>
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
