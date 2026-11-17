@@ -1,0 +1,34 @@
+name: Invoice Alerts
+
+# "Create Invoice Alert" emails, once a day at 9am Eastern: one email per mail
+# drop that reached Osprey status 700 for a customer on terms. GitHub cron is
+# UTC-only, so it fires at 13:00 and 14:00 UTC and the script skips whichever
+# one isn't 9am Eastern. Manual runs always go.
+
+on:
+  schedule:
+    - cron: '0 13,14 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: invoice-alerts
+  cancel-in-progress: false
+
+jobs:
+  alerts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node invoice-alerts.js
+        env:
+          REQUIRE_ET_HOUR: ${{ github.event_name == 'schedule' && '9' || '' }}
+          OSPREY_USER: ${{ secrets.OSPREY_USER }}
+          OSPREY_PASS: ${{ secrets.OSPREY_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}

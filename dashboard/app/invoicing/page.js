@@ -7,13 +7,18 @@
 // Drop number = the Osprey mail ID (mail_drop_id, e.g. 27xxxx).
 // Invoice number = order number-mail ID.
 // Only drops mailed on/after REPORT_START are listed; invoices before that
-// were auto-generated.
+// were auto-generated. Valassis is left out (separate invoicing process).
+//
+// invoice_alerts holds each drop's invoice line items (from Osprey's NetSuite
+// check report) once it reaches status 700, plus when the daily "Create
+// Invoice Alert" email went out (invoice-alerts.js, 9am ET). Rows loaded by
+// the backfill were never emailed. Click a row to see its line items.
 //
 // Each drop can be marked "Invoiced in QuickBooks" (qb_invoiced_drops, one row
 // per drop; unmarking flips is_invoiced off). Every mark/unmark is logged to
 // notifications so it shows in the activity feed.
 
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { createClient } from '../../lib/supabase';
 import { OspreyOrderLink } from '../../lib/ospreyLinks';
 
@@ -25,6 +30,8 @@ const fmtStamp = (iso) => iso
   : '—';
 
 const REPORT_START = '2026-10-20';
+const EXCLUDED_CUSTOMERS = /^valassis/i;
+const fmt$ = (n) => (Number(n) || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
 const VIEWS = [
   { key: 'open', label: 'To invoice' },
@@ -47,6 +54,8 @@ export default function InvoicingPage() {
   const supabase = createClient();
   const [rows, setRows] = useState(null);
   const [invoiced, setInvoiced] = useState(new Map()); // mail_drop_id → { invoiced_by, invoiced_at }
+  const [alerts, setAlerts] = useState(new Map());     // mail_drop_id → invoice_alerts row
+  const [expanded, setExpanded] = useState(null);      // mail_drop_id whose line items are open
   const [userEmail, setUserEmail] = useState('');
   const [error, setError] = useState('');
   const [view, setView] = useState('open');
@@ -83,9 +92,15 @@ export default function InvoicingPage() {
           .order('mail_drop_id'));
         setInvoiced(new Map(qb.map(q => [q.mail_drop_id, { invoiced_by: q.invoiced_by, invoiced_at: q.invoiced_at }])));
 
+        const al = await fetchAll(() => supabase
+          .from('invoice_alerts')
+          .select('mail_drop_id, line_items, total_amount, source, email_sent_at, email_error')
+          .order('mail_drop_id'));
+        setAlerts(new Map(al.map(a => [a.mail_drop_id, a])));
+
         setRows(drops
           .map(d => ({ ...d, term: terms[d.customer_id] || 'PrePay', invoice: `${d.order_id}-${d.mail_drop_id}` }))
-          .filter(d => d.term !== 'PrePay')
+          .filter(d => d.term !== 'PrePay' && !EXCLUDED_CUSTOMERS.test((d.customer_name || '').trim()))
           .sort((a, b) => (b.drop_act_date || '').localeCompare(a.drop_act_date || '') || a.invoice.localeCompare(b.invoice)));
       } catch (e) {
         setError(e.message);
@@ -152,11 +167,15 @@ export default function InvoicingPage() {
     view === 'all' || (view === 'invoiced') === invoiced.has(r.mail_drop_id)), [filtered, invoiced, view]);
 
   function handleExport() {
-    const header = ['Client', 'Terms', 'Order Number', 'Drop Number', 'Invoice Number', 'Actual Mail Date', 'Invoiced in QB', 'Invoiced By', 'Invoiced At'];
+    const header = ['Client', 'Terms', 'Order Number', 'Drop Number', 'Invoice Number', 'Actual Mail Date', 'Invoice Total', 'Line Items', 'Alert Emailed', 'Invoiced in QB', 'Invoiced By', 'Invoiced At'];
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const lines = shown.map(r => {
       const q = invoiced.get(r.mail_drop_id);
+      const a = alerts.get(r.mail_drop_id);
       return [r.customer_name?.trim(), r.term, r.order_id, r.mail_drop_id, r.invoice, r.drop_act_date,
+        a ? Number(a.total_amount).toFixed(2) : '',
+        a ? a.line_items.map(l => `${l.product} x${l.quantity} = ${Number(l.amount).toFixed(2)}`).join('; ') : '',
+        a?.email_sent_at || (a?.source === 'backfill' ? 'Not emailed (loaded retroactively)' : ''),
         q ? 'Yes' : 'No', q?.invoiced_by, q?.invoiced_at].map(esc).join(',');
     });
     const blob = new Blob([[header.map(esc).join(','), ...lines].join('\n')], { type: 'text/csv' });
@@ -168,7 +187,7 @@ export default function InvoicingPage() {
   }
 
   const inputStyle = { borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--text-primary)' };
-  const headers = ['Client', 'Terms', 'Order Number', 'Drop Number', 'Invoice Number', 'Actual Mail Date', 'QuickBooks'];
+  const headers = ['Client', 'Terms', 'Order Number', 'Drop Number', 'Invoice Number', 'Actual Mail Date', 'Invoice Total', 'Alert', 'QuickBooks'];
 
   return (
     <div className="max-w-6xl mx-auto space-y-4">
@@ -176,7 +195,7 @@ export default function InvoicingPage() {
         <div>
           <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>Invoicing Report</h1>
           <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            Completed drops for clients on terms (not PrePay), including LDP, mailed on or after {fmtDate(REPORT_START)}.
+            Completed drops for clients on terms (not PrePay, not Valassis), including LDP, mailed on or after {fmtDate(REPORT_START)}. Click a row for its invoice line items.
           </p>
         </div>
         <div className="flex gap-2 flex-wrap items-center text-sm">
@@ -226,8 +245,12 @@ export default function InvoicingPage() {
             )}
             {shown?.map(r => {
               const q = invoiced.get(r.mail_drop_id);
+              const a = alerts.get(r.mail_drop_id);
+              const open = expanded === r.mail_drop_id;
               return (
-                <tr key={r.mail_drop_id} className="border-t" style={{ borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
+                <Fragment key={r.mail_drop_id}>
+                <tr className="border-t cursor-pointer" onClick={() => setExpanded(open ? null : r.mail_drop_id)}
+                  style={{ borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
                   <td className="px-4 py-2">
                     {r.customer_name}
                     {/ldp/i.test(r.mail_method || '') && (
@@ -239,7 +262,17 @@ export default function InvoicingPage() {
                   <td className="px-4 py-2 whitespace-nowrap">{r.mail_drop_id}</td>
                   <td className="px-4 py-2 font-semibold whitespace-nowrap">{r.invoice}</td>
                   <td className="px-4 py-2 whitespace-nowrap">{fmtDate(r.drop_act_date)}</td>
-                  <td className="px-4 py-2 whitespace-nowrap">
+                  <td className="px-4 py-2 whitespace-nowrap font-medium">
+                    {a ? <>{fmt$(a.total_amount)} <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{open ? '▲' : '▼'}</span></> : '—'}
+                  </td>
+                  <td className="px-4 py-2 whitespace-nowrap text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {!a ? 'Waiting for status 700'
+                      : a.email_sent_at ? `Emailed ${fmtStamp(a.email_sent_at)}`
+                      : a.source === 'backfill' ? 'Not emailed (loaded retroactively)'
+                      : a.email_error ? <span style={{ color: 'var(--status-critical)' }}>Email failed, will retry</span>
+                      : 'Email pending'}
+                  </td>
+                  <td className="px-4 py-2 whitespace-nowrap" onClick={e => e.stopPropagation()}>
                     {q ? (
                       <div className="flex items-center gap-2">
                         <span title={`${q.invoiced_by || 'unknown'} · ${fmtStamp(q.invoiced_at)}`}
@@ -264,6 +297,41 @@ export default function InvoicingPage() {
                     )}
                   </td>
                 </tr>
+                {open && (
+                  <tr style={{ background: 'var(--surface2)', color: 'var(--text-primary)' }}>
+                    <td colSpan={headers.length} className="px-4 py-3">
+                      {a ? (
+                        <table className="text-sm">
+                          <thead>
+                            <tr style={{ color: 'var(--text-muted)' }} className="text-left">
+                              <th className="pr-8 py-1 font-medium">Invoice line item</th>
+                              <th className="pr-8 py-1 font-medium text-right">Quantity</th>
+                              <th className="py-1 font-medium text-right">Amount</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {a.line_items.map((l, i) => (
+                              <tr key={i}>
+                                <td className="pr-8 py-1">{l.product}</td>
+                                <td className="pr-8 py-1 text-right">{Number(l.quantity || 0).toLocaleString()}</td>
+                                <td className="py-1 text-right">{fmt$(l.amount)}</td>
+                              </tr>
+                            ))}
+                            <tr className="font-semibold">
+                              <td className="pr-8 py-1" colSpan={2}>Total</td>
+                              <td className="py-1 text-right">{fmt$(a.total_amount)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      ) : (
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          Line items load once the drop reaches status 700 (tax processed) and the next 9am alert run picks it up.
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
           </tbody>
