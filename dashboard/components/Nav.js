@@ -37,6 +37,7 @@ export default function Nav() {
     { href: '/cashflow', label: 'Cashflow' },
     { href: '/invoicing', label: 'Invoicing Report' },
     { href: '/open-balances', label: 'Open Balances' },
+    { href: '/usps-report', label: 'USPS Reporting' },
     { href: '/actuals', label: 'Actuals' },
     { href: '/hygiene', label: 'Data Hygiene' },
     { href: '/crm', label: 'CRM Integration' },
