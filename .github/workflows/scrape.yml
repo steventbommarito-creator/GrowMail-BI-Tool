@@ -13,7 +13,9 @@ on:
         required: false
         default: 'both'
 jobs:
+  # Osprey half, on Linux.
   scrape:
+    if: ${{ inputs.source != 'usps' }}
     runs-on: ubuntu-24.04   # Playwright 1.59 can't install chromium on ubuntu-latest (26.04)
     steps:
       - uses: actions/checkout@v4
@@ -23,16 +25,35 @@ jobs:
       - run: npm install
       - run: npx playwright install chromium --with-deps
         timeout-minutes: 10
-      # xvfb gives the USPS scrape a display: USPS blocks headless browsers.
-      - run: xvfb-run -a node run.js
+      - run: node run.js
         env:
           OSPREY_URL: ${{ secrets.OSPREY_URL }}
           OSPREY_USER: ${{ secrets.OSPREY_USER }}
           OSPREY_PASS: ${{ secrets.OSPREY_PASS }}
-          USPS_USER: ${{ secrets.USPS_USER }}
-          USPS_PASS: ${{ secrets.USPS_PASS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TRIGGERED_BY: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'cron' }}
-          SCRAPE_SOURCE: ${{ inputs.source || 'both' }}
+          SCRAPE_SOURCE: osprey
+
+  # USPS half, on macOS. USPS's sign-in device check refuses the Linux runners
+  # (headless, and headed under xvfb) with a 403 that shows as "Sorry that
+  # isn't right"; headed real Chrome on a macOS runner gets through.
+  usps:
+    if: ${{ inputs.source != 'osprey' }}
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node run.js
+        env:
+          USPS_USER: ${{ secrets.USPS_USER }}
+          USPS_PASS: ${{ secrets.USPS_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TRIGGERED_BY: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'cron' }}
+          SCRAPE_SOURCE: usps

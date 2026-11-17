@@ -21,8 +21,8 @@ async function scrapeUSPS() {
 
   // USPS's sign-in runs a device check that rejects headless browsers with a
   // generic "Sorry that isn't right" (the authenticate call 403s), so this runs
-  // headed in real Chrome. In CI the workflow wraps the run in xvfb-run to give
-  // it a display. Falls back to Playwright's Chromium where Chrome isn't installed.
+  // headed in real Chrome. In CI it runs on a macOS runner: the Linux runners are
+  // refused even headed under xvfb. Falls back to Playwright's Chromium where Chrome isn't installed.
   const launchOpts = {
     headless: false,
     args: [

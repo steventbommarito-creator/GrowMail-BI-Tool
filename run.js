@@ -87,7 +87,7 @@ async function main() {
   }
 
   // --- AI Insights — only at midnight EST (5am UTC) ---
-  if (hourUTC === 5) {
+  if (hourUTC === 5 && SCRAPE_SOURCE !== 'usps') {   // the USPS-only job has no OpenAI key
     try {
       console.log('\n[AI] Generating insights...');
       await aiInsights();
