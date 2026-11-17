@@ -19,18 +19,21 @@ async function scrapeUSPS() {
     throw new Error('Missing required environment variables: USPS_USER, USPS_PASS');
   }
 
-  const browser = await chromium.launch({
-    headless: true,
+  // USPS's sign-in runs a device check that rejects headless browsers with a
+  // generic "Sorry that isn't right" (the authenticate call 403s), so this runs
+  // headed in real Chrome. In CI the workflow wraps the run in xvfb-run to give
+  // it a display. Falls back to Playwright's Chromium where Chrome isn't installed.
+  const launchOpts = {
+    headless: false,
     args: [
       '--disable-blink-features=AutomationControlled',
       '--no-sandbox',
       '--disable-dev-shm-usage',
     ],
-  });
-  const context = await browser.newContext({
-    acceptDownloads: true,
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  });
+  };
+  const browser = await chromium.launch({ ...launchOpts, channel: 'chrome' })
+    .catch(() => chromium.launch(launchOpts));
+  const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
 
   // Remove webdriver flag that triggers bot detection

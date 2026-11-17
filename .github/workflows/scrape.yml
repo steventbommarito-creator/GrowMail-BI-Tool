@@ -23,7 +23,8 @@ jobs:
       - run: npm install
       - run: npx playwright install chromium --with-deps
         timeout-minutes: 10
-      - run: node run.js
+      # xvfb gives the USPS scrape a display: USPS blocks headless browsers.
+      - run: xvfb-run -a node run.js
         env:
           OSPREY_URL: ${{ secrets.OSPREY_URL }}
           OSPREY_USER: ${{ secrets.OSPREY_USER }}
