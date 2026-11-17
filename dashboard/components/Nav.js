@@ -27,22 +27,29 @@ export default function Nav() {
   const [lastSync, setLastSync] = useState({});             // { osprey: { time, status }, usps: ... }
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const themeRef = useRef(null);
+  const [openMenu, setOpenMenu] = useState(null);           // label of the open nav dropdown
+  const menusRef = useRef(null);
   const pollRefs = useRef({});
 
+  // Top-level entries are either a page link or a dropdown group of links.
   const links = [
     { href: '/late-mailings', label: 'Late Mailings' },
     { href: '/mailing-timeliness', label: 'Mailing Timeliness' },
     { href: '/overview', label: 'Overview' },
-    { href: '/forecast', label: 'Forecast' },
     { href: '/cashflow', label: 'Cashflow' },
-    { href: '/invoicing', label: 'Invoicing Report' },
-    { href: '/open-balances', label: 'Open Balances' },
-    { href: '/usps-report', label: 'USPS Reporting' },
-    { href: '/actuals', label: 'Actuals' },
-    { href: '/hygiene', label: 'Data Hygiene' },
-    { href: '/crm', label: 'CRM Integration' },
-    { href: '/crm/sync', label: 'Sync Status' },
+    { label: 'Accounting', items: [
+      { href: '/open-balances', label: 'Open Balances' },
+      { href: '/usps-report', label: 'USPS Reporting' },
+      { href: '/invoicing', label: 'Invoicing Report' },
+      { href: '/actuals', label: 'Actuals' },
+      { href: '/forecast', label: 'Forecast' },
+    ] },
     { href: '/quotes', label: 'Quotes' },
+    { label: 'Settings/Admin', items: [
+      { href: '/hygiene', label: 'Data Hygiene' },
+      { href: '/crm', label: 'CRM Integration' },
+      { href: '/crm/sync', label: 'Sync Status' },
+    ] },
   ];
 
   // Load last sync times on mount
@@ -92,6 +99,7 @@ export default function Nav() {
   useEffect(() => {
     function handleClick(e) {
       if (themeRef.current && !themeRef.current.contains(e.target)) setShowThemeMenu(false);
+      if (menusRef.current && !menusRef.current.contains(e.target)) setOpenMenu(null);
     }
     document.addEventListener('mousedown', handleClick);
     return () => {
@@ -134,19 +142,49 @@ export default function Nav() {
     <nav style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}
       className="px-4 py-2 flex items-center justify-between gap-4 flex-wrap">
 
-      <div className="flex items-center gap-5 flex-wrap">
+      <div className="flex items-center gap-5 flex-wrap" ref={menusRef}>
         <span className="font-bold text-base" style={{ color: 'var(--accent)' }}>GrowMail BI</span>
-        {links.map((l) => (
-          <Link key={l.href} href={l.href}
-            style={{
-              color: pathname === l.href ? 'var(--accent)' : 'var(--text-secondary)',
-              borderBottom: pathname === l.href ? '2px solid var(--accent)' : '2px solid transparent',
-              paddingBottom: '2px',
-            }}
-            className="text-sm font-medium transition-colors whitespace-nowrap">
-            {l.label}
-          </Link>
-        ))}
+        {links.map((l) => {
+          const active = l.items ? l.items.some(i => i.href === pathname) : pathname === l.href;
+          const linkStyle = {
+            color: active ? 'var(--accent)' : 'var(--text-secondary)',
+            borderBottom: active ? '2px solid var(--accent)' : '2px solid transparent',
+            paddingBottom: '2px',
+          };
+          if (!l.items) {
+            return (
+              <Link key={l.href} href={l.href} style={linkStyle}
+                className="text-sm font-medium transition-colors whitespace-nowrap">
+                {l.label}
+              </Link>
+            );
+          }
+          const open = openMenu === l.label;
+          return (
+            <div key={l.label} className="relative">
+              <button onClick={() => setOpenMenu(open ? null : l.label)} style={linkStyle}
+                aria-haspopup="menu" aria-expanded={open}
+                className="text-sm font-medium transition-colors whitespace-nowrap">
+                {l.label} <span style={{ fontSize: '10px' }}>{open ? '▲' : '▼'}</span>
+              </button>
+              {open && (
+                <div role="menu" className="absolute left-0 top-8 z-50 rounded shadow-lg py-1 min-w-44"
+                  style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                  {l.items.map(i => (
+                    <Link key={i.href} href={i.href} role="menuitem" onClick={() => setOpenMenu(null)}
+                      className="block px-3 py-1.5 text-sm whitespace-nowrap"
+                      style={{
+                        color: pathname === i.href ? 'var(--accent)' : 'var(--text-secondary)',
+                        background: pathname === i.href ? 'var(--accent-light)' : 'transparent',
+                      }}>
+                      {i.label}
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       <div className="flex items-center gap-3">
