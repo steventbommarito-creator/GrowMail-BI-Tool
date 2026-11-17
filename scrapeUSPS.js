@@ -31,10 +31,18 @@ async function scrapeUSPS() {
       '--disable-dev-shm-usage',
     ],
   };
+  let browserName = 'Chrome';
   const browser = await chromium.launch({ ...launchOpts, channel: 'chrome' })
-    .catch(() => chromium.launch(launchOpts));
+    .catch(() => { browserName = 'Playwright Chromium'; return chromium.launch(launchOpts); });
+  console.log(`Browser: ${browserName} ${browser.version()}`);
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
+
+  // Log each sign-in call's HTTP status (no bodies): a 403 here means USPS's
+  // device check refused the browser, not that the password is wrong.
+  page.on('response', (r) => {
+    if (r.request().method() === 'POST' && /\/authenticate/.test(r.url())) console.log(`  sign-in call → HTTP ${r.status()}`);
+  });
 
   // Remove webdriver flag that triggers bot detection
   await page.addInitScript(() => {
