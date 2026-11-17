@@ -104,6 +104,9 @@ export default function LateMailingsPage() {
   // Live Osprey Balance Due, keyed by order_id. Missing key = still loading
   // (cell shows a spinner); null = lookup failed.
   const [ospreyBalances, setOspreyBalances] = useState({});
+  // Dated Piece Date from each order's Freshsales deal, keyed by order_id
+  // ('YYYY-MM-DD'). Orders whose deal has no date are absent.
+  const [datedPieces, setDatedPieces] = useState({});
   const [loading, setLoading] = useState(true);
 
   // ── Column filters ─────────────────────────────────────────────────────────
@@ -256,6 +259,29 @@ export default function LateMailingsPage() {
     Promise.all([worker(), worker(), worker()]);
   }, [drops, futureDrops]);
 
+  // Dated Piece Date from Freshsales for every order on the page, 100 orders
+  // per request. A failed lookup just leaves the column blank.
+  const requestedDatedIds = useRef(new Set());
+  useEffect(() => {
+    const ids = [...new Set([...drops, ...futureDrops].map(d => d.order_id).filter(Boolean).map(String))]
+      .filter(id => !requestedDatedIds.current.has(id));
+    if (!ids.length) return;
+    ids.forEach(id => requestedDatedIds.current.add(id));
+    (async () => {
+      for (let i = 0; i < ids.length; i += 100) {
+        try {
+          const res = await fetch('/api/freshsales/dated-pieces', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ orderIds: ids.slice(i, i + 100) }),
+          });
+          const dates = res.ok ? (await res.json()).dates : null;
+          if (dates) setDatedPieces(prev => ({ ...prev, ...dates }));
+        } catch { /* leave blank */ }
+      }
+    })();
+  }, [drops, futureDrops]);
+
   // Enrich each drop with the fields the rest of the page needs:
   // billVia, daysLate (negative for future), postageRequired (post EPS-deduction),
   // epsCharged, isEst. Shared between lateDrops and futureDrops so both have the
@@ -280,8 +306,9 @@ export default function LateMailingsPage() {
     // Osprey Balance Due — undefined while loading, null if the lookup failed.
     const ob = d.order_id ? ospreyBalances[String(d.order_id)] : null;
     const balanceDue = ob === undefined ? undefined : (ob ? ob.balance : null);
-    return { ...d, billVia, epsCharged, rawPostage, isEst, postageRequired, daysLate, remainingBalance, balanceDue };
-  }, [customerTerms, epsDeductedMap, ospreyBalances, today]);
+    const datedPieceDate = d.order_id ? (datedPieces[String(d.order_id)] || '') : '';
+    return { ...d, datedPieceDate, billVia, epsCharged, rawPostage, isEst, postageRequired, daysLate, remainingBalance, balanceDue };
+  }, [customerTerms, epsDeductedMap, ospreyBalances, datedPieces, today]);
 
   const lateDrops = useMemo(() => drops.map(enrichDrop), [drops, enrichDrop]);
   const enrichedFutureDrops = useMemo(() => futureDrops.map(enrichDrop).map(d => ({ ...d, _isFuture: true })), [futureDrops, enrichDrop]);
@@ -573,6 +600,7 @@ export default function LateMailingsPage() {
     const rows = sortedRowsWithRunning.map(d => ({
       'Days Late': d.daysLate,
       'Est Date': d.drop_est_date || '',
+      'Dated Piece Date': d.datedPieceDate || '',
       'Customer': d.customer_name || '',
       'Customer ID': d.customer_id || '',
       'Product': d.product_category || '',
@@ -913,6 +941,7 @@ export default function LateMailingsPage() {
                 {[
                   { key: 'daysLate',           label: 'Days Late',  align: 'left' },
                   { key: 'drop_est_date',      label: 'Est Date',   align: 'left' },
+                  { key: 'datedPieceDate',     label: 'Dated Piece', align: 'left' },
                   { key: 'customer_name',      label: 'Customer',   align: 'left' },
                   { key: 'product_category',   label: 'Product',    align: 'left' },
                   { key: 'order_id',           label: 'Order ID',   align: 'left' },
@@ -992,7 +1021,7 @@ export default function LateMailingsPage() {
             <tbody>
               {sortedRowsWithRunning.length === 0 && (
                 <tr>
-                  <td colSpan={planningMode ? 16 : 15} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
+                  <td colSpan={planningMode ? 17 : 16} className="px-3 py-6 text-center" style={{ color: 'var(--text-muted)' }}>
                     No late drops. 🎉
                   </td>
                 </tr>
@@ -1049,6 +1078,19 @@ export default function LateMailingsPage() {
                     }}
                     title={plannedInfo ? 'Click to remove from plan' : undefined}>
                     {plannedInfo ? `⏰ ${ET(plannedInfo.planned_date)}` : '—'}
+                  </td>
+                  {/* Dated Piece Date from the order's Freshsales deal. Red once
+                      the date has passed, orange within a week of it. */}
+                  <td className="px-3 py-1.5 whitespace-nowrap"
+                    style={{
+                      color: !d.datedPieceDate ? 'var(--text-muted)'
+                        : d.datedPieceDate < today ? 'var(--status-critical)'
+                        : d.datedPieceDate <= addDays(today, 7) ? 'var(--status-warn)'
+                        : 'var(--text-primary)',
+                      fontWeight: d.datedPieceDate ? 600 : 'normal',
+                    }}
+                    title={d.datedPieceDate ? 'Dated Piece Date from the Freshsales deal' : undefined}>
+                    {d.datedPieceDate ? ET(d.datedPieceDate) : '—'}
                   </td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-primary)' }}>{d.customer_name || '—'}</td>
                   <td className="px-3 py-1.5" style={{ color: 'var(--text-secondary)' }}>{d.product_category || '—'}</td>
