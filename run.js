@@ -68,7 +68,17 @@ async function main() {
     const uspsStart = new Date().toISOString();
     try {
       console.log('\n[USPS] Starting scrape...');
-      const uspsPath = await scrapeUSPS();
+      // USPS's sign-in device check refuses some attempts at random (403 on a
+      // correct login), so give it up to three tries in a fresh browser.
+      let uspsPath;
+      for (let attempt = 1; ; attempt++) {
+        try { uspsPath = await scrapeUSPS(); break; }
+        catch (err) {
+          if (attempt >= 3 || !/sign-in was not accepted/.test(err.message)) throw err;
+          console.log(`[USPS] Sign-in refused (attempt ${attempt} of 3), retrying in 30s...`);
+          await new Promise((r) => setTimeout(r, 30000));
+        }
+      }
       if (uspsPath) {
         console.log(`[USPS] Downloaded: ${uspsPath}`);
         const result = await insertUSPS(uspsPath);
@@ -81,6 +91,9 @@ async function main() {
     } catch (err) {
       console.error('[USPS] ERROR:', err.message);
       await logSync('usps', uspsStart, { error: err.message }).catch(() => {});
+      // The USPS-only job goes red on failure so it's noticed; in a combined
+      // run a USPS failure doesn't fail the Osprey half.
+      if (SCRAPE_SOURCE === 'usps') process.exitCode = 1;
     }
   } else {
     console.log('\n[USPS] Skipped (source=' + SCRAPE_SOURCE + ')');
