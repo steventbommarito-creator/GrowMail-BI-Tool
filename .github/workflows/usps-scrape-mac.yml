@@ -1,0 +1,31 @@
+name: USPS Scrape (macOS)
+
+# USPS's sign-in device check refuses the Linux runners (headless or under
+# xvfb), so this runs the USPS half of the scrape on a macOS runner, headed in
+# real Chrome. macOS minutes bill at 10x, so keep this to a few runs a day.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: usps-scrape-mac
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node run.js
+        env:
+          USPS_USER: ${{ secrets.USPS_USER }}
+          USPS_PASS: ${{ secrets.USPS_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TRIGGERED_BY: manual
+          SCRAPE_SOURCE: usps
