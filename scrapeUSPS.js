@@ -81,16 +81,30 @@ async function scrapeUSPS() {
     await page.getByRole('button', { name: 'Sign In' }).click();
     await page.waitForTimeout(1000);
 
-    // Wait for BCG dashboard
+    // Wait for the sign-in redirect to leave verified.usps.com and land on the
+    // BCG. Navigating before it finishes aborts the next page load, and staying
+    // on the sign-in page means USPS refused the login.
     console.log('Waiting for post-login navigation...');
+    const signedIn = await page.waitForURL((u) => !/verified\.usps\.com/.test(u.toString()), { timeout: 60000 })
+      .then(() => true).catch(() => false);
+    console.log('Post-login URL:', page.url());
+    if (!signedIn) throw new Error('USPS sign-in was not accepted (still on the sign-in page)');
     await page.waitForLoadState('domcontentloaded', { timeout: 60000 });
     await page.waitForTimeout(3000);
-    console.log('Post-login URL:', page.url());
     console.log('Logged in successfully');
 
-    // Step 5: Navigate directly to EPS Transaction History Report
+    // Step 5: Navigate directly to EPS Transaction History Report. A redirect
+    // still settling can abort the first attempt, so retry.
     console.log('Navigating to EPS Transaction History...');
-    await page.goto('https://epay.usps.com/paymod/reports/transaction/history');
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await page.goto('https://epay.usps.com/paymod/reports/transaction/history');
+        break;
+      } catch (e) {
+        if (attempt >= 3 || !/ERR_ABORTED/.test(e.message)) throw e;
+        await page.waitForTimeout(3000);
+      }
+    }
     await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
     await page.waitForTimeout(2000);
     console.log('EPS report page loaded, URL:', page.url());
