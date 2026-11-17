@@ -190,7 +190,7 @@ export default function InvoicingPage() {
   const headers = ['Client', 'Terms', 'Order Number', 'Drop Number', 'Invoice Number', 'Actual Mail Date', 'Invoice Total', 'Alert', 'QuickBooks'];
 
   return (
-    <div className="max-w-6xl mx-auto space-y-4">
+    <div className="w-full space-y-4">
       <div className="flex items-end justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>Invoicing Report</h1>
@@ -265,7 +265,7 @@ export default function InvoicingPage() {
                   <td className="px-4 py-2 whitespace-nowrap font-medium">
                     {a ? <>{fmt$(a.total_amount)} <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{open ? '▲' : '▼'}</span></> : '—'}
                   </td>
-                  <td className="px-4 py-2 whitespace-nowrap text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <td className="px-4 py-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                     {!a ? 'Waiting for status 700'
                       : a.email_sent_at ? `Emailed ${fmtStamp(a.email_sent_at)}`
                       : a.source === 'backfill' ? 'Not emailed (loaded retroactively)'
